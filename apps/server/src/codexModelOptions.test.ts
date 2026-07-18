@@ -13,6 +13,14 @@ it("returns the selected Codex service tier id", () => {
   assert.equal(getCodexServiceTierOptionValue(selection), "flex");
 });
 
+it("normalizes the Standard service tier for Codex app-server", () => {
+  const selection = createModelSelection(ProviderInstanceId.make("codex"), "gpt-5.6-sol", [
+    { id: "serviceTier", value: "default" },
+  ]);
+
+  assert.equal(getCodexServiceTierOptionValue(selection), "standard");
+});
+
 it("keeps legacy persisted fast mode selections working", () => {
   const selection = createModelSelection(ProviderInstanceId.make("codex"), "gpt-5.4", [
     { id: "fastMode", value: true },
