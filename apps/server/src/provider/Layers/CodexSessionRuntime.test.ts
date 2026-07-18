@@ -148,6 +148,18 @@ describe("buildTurnStartParams", () => {
             url: "data:image/png;base64,abc",
           },
         ],
+        structuredInputs: [
+          {
+            type: "skill",
+            name: "frontend-design",
+            path: "/skills/frontend-design/SKILL.md",
+          },
+          {
+            type: "mention",
+            name: "App.tsx",
+            path: "apps/web/src/App.tsx",
+          },
+        ],
       });
 
       NodeAssert.deepStrictEqual(params, {
@@ -164,6 +176,16 @@ describe("buildTurnStartParams", () => {
           {
             type: "image",
             url: "data:image/png;base64,abc",
+          },
+          {
+            type: "skill",
+            name: "frontend-design",
+            path: "/skills/frontend-design/SKILL.md",
+          },
+          {
+            type: "mention",
+            name: "App.tsx",
+            path: "apps/web/src/App.tsx",
           },
         ],
         model: "gpt-5.3-codex",

@@ -405,6 +405,18 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
             { id: "serviceTier", value: "priority" },
           ]),
           attachments: [],
+          structuredInputs: [
+            {
+              type: "skill",
+              name: "frontend-design",
+              path: "/skills/frontend-design/SKILL.md",
+            },
+            {
+              type: "mention",
+              name: "App.tsx",
+              path: "apps/web/src/App.tsx",
+            },
+          ],
         }),
       );
 
@@ -413,6 +425,18 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
         model: "gpt-5.3-codex",
         effort: "high",
         serviceTier: "priority",
+        structuredInputs: [
+          {
+            type: "skill",
+            name: "frontend-design",
+            path: "/skills/frontend-design/SKILL.md",
+          },
+          {
+            type: "mention",
+            name: "App.tsx",
+            path: "apps/web/src/App.tsx",
+          },
+        ],
       });
     }),
   );

@@ -12,6 +12,7 @@ import {
   type ProviderInteractionMode,
   type ProviderRequestKind,
   type ProviderSession,
+  type ProviderSendTurnInput,
   type ProviderTurnStartResult,
   type ProviderUserInputAnswers,
   RuntimeMode,
@@ -147,6 +148,7 @@ export interface CodexSessionRuntimeSendTurnInput {
   readonly serviceTier?: CodexServiceTier | undefined;
   readonly effort?: EffectCodexSchema.V2TurnStartParams__ReasoningEffort | undefined;
   readonly interactionMode?: ProviderInteractionMode;
+  readonly structuredInputs?: ProviderSendTurnInput["structuredInputs"];
 }
 
 export interface CodexThreadTurnSnapshot {
@@ -445,6 +447,7 @@ export function buildTurnStartParams(input: {
   readonly serviceTier?: CodexServiceTier;
   readonly effort?: EffectCodexSchema.V2TurnStartParams__ReasoningEffort;
   readonly interactionMode?: ProviderInteractionMode;
+  readonly structuredInputs?: ProviderSendTurnInput["structuredInputs"];
 }): Effect.Effect<
   CodexTurnStartParamsWithCollaborationMode,
   CodexErrors.CodexAppServerProtocolParseError
@@ -458,6 +461,9 @@ export function buildTurnStartParams(input: {
   }
   for (const attachment of input.attachments ?? []) {
     turnInput.push(attachment);
+  }
+  for (const structuredInput of input.structuredInputs ?? []) {
+    turnInput.push(structuredInput);
   }
 
   const config = runtimeModeToThreadConfig(input.runtimeMode);
@@ -1852,6 +1858,7 @@ export const makeCodexSessionRuntime = (
             ...(input.serviceTier ? { serviceTier: input.serviceTier } : {}),
             ...(input.effort ? { effort: input.effort } : {}),
             ...(input.interactionMode ? { interactionMode: input.interactionMode } : {}),
+            ...(input.structuredInputs ? { structuredInputs: input.structuredInputs } : {}),
           });
           const sessionBeforeSend = yield* Ref.get(sessionRef);
           const activeTurnId =

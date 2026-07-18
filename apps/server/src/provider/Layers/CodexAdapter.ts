@@ -1617,6 +1617,9 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           : {}),
         ...(serviceTier ? { serviceTier } : {}),
         ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
+        ...(input.structuredInputs !== undefined
+          ? { structuredInputs: input.structuredInputs }
+          : {}),
         ...(codexAttachments.length > 0 ? { attachments: codexAttachments } : {}),
       })
       .pipe(

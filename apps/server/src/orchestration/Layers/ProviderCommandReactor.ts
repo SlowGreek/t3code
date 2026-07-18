@@ -10,7 +10,9 @@ import {
   type OrchestrationSession,
   ThreadId,
   type ProviderSession,
+  type ProviderSendTurnInput,
   type RuntimeMode,
+  type ServerProviderSkill,
   type TurnId,
 } from "@t3tools/contracts";
 import { isTemporaryWorktreeBranch, WORKTREE_BRANCH_PREFIX } from "@t3tools/shared/git";
@@ -63,6 +65,59 @@ type ProviderIntentEvent = Extract<
 function toNonEmptyProviderInput(value: string | undefined): string | undefined {
   const normalized = value?.trim();
   return normalized && normalized.length > 0 ? normalized : undefined;
+}
+
+function decodeComposerMentionPath(path: string): string {
+  try {
+    return decodeURI(path);
+  } catch (cause) {
+    if (cause instanceof URIError) {
+      return path;
+    }
+    throw cause;
+  }
+}
+
+export function buildProviderStructuredInputs(input: {
+  readonly text: string;
+  readonly skills: ReadonlyArray<ServerProviderSkill>;
+}): NonNullable<ProviderSendTurnInput["structuredInputs"]> {
+  const structuredInputs: Array<NonNullable<ProviderSendTurnInput["structuredInputs"]>[number]> =
+    [];
+  const seen = new Set<string>();
+  const enabledSkills = new Map(
+    input.skills.filter((skill) => skill.enabled).map((skill) => [skill.name, skill] as const),
+  );
+
+  for (const match of input.text.matchAll(/(?:^|[\s(])\$([A-Za-z0-9][A-Za-z0-9._-]*)/g)) {
+    const name = match[1];
+    const skill = name ? enabledSkills.get(name) : undefined;
+    if (!skill) continue;
+    const key = `skill:${skill.path}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    structuredInputs.push({ type: "skill", name: skill.name, path: skill.path });
+  }
+
+  for (const match of input.text.matchAll(/\[([^\]\n]+)\]\(([^)\n]+)\)/g)) {
+    const name = match[1]?.trim();
+    const encodedPath = match[2]?.trim();
+    if (
+      !name ||
+      !encodedPath ||
+      encodedPath.startsWith("#") ||
+      /^[A-Za-z][A-Za-z\d+.-]*:/.test(encodedPath)
+    ) {
+      continue;
+    }
+    const path = decodeComposerMentionPath(encodedPath);
+    const key = `mention:${path}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    structuredInputs.push({ type: "mention", name, path });
+  }
+
+  return structuredInputs;
 }
 
 function mapProviderSessionStatusToOrchestrationStatus(
@@ -633,6 +688,13 @@ const make = Effect.gen(function* () {
               .sessionModelSwitch;
     const requestedModelSelection =
       input.modelSelection ?? threadModelSelections.get(input.threadId) ?? thread.modelSelection;
+    const providers = yield* providerRegistry.getProviders;
+    const structuredInputs = buildProviderStructuredInputs({
+      text: input.messageText,
+      skills:
+        providers.find((provider) => provider.instanceId === requestedModelSelection.instanceId)
+          ?.skills ?? [],
+    });
     const modelForTurn =
       sessionModelSwitch === "unsupported" && input.modelSelection === undefined
         ? activeSession?.model !== undefined
@@ -650,6 +712,7 @@ const make = Effect.gen(function* () {
       ...(normalizedAttachments.length > 0 ? { attachments: normalizedAttachments } : {}),
       ...(modelForTurn !== undefined ? { modelSelection: modelForTurn } : {}),
       ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
+      ...(structuredInputs.length > 0 ? { structuredInputs } : {}),
     };
   });
 

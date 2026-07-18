@@ -77,6 +77,22 @@ export const ProviderSendTurnInput = Schema.Struct({
   ),
   modelSelection: Schema.optional(ModelSelection),
   interactionMode: Schema.optional(ProviderInteractionMode),
+  structuredInputs: Schema.optional(
+    Schema.Array(
+      Schema.Union([
+        Schema.Struct({
+          type: Schema.Literal("skill"),
+          name: TrimmedNonEmptyString,
+          path: TrimmedNonEmptyString,
+        }),
+        Schema.Struct({
+          type: Schema.Literal("mention"),
+          name: TrimmedNonEmptyString,
+          path: TrimmedNonEmptyString,
+        }),
+      ]),
+    ),
+  ),
 });
 export type ProviderSendTurnInput = typeof ProviderSendTurnInput.Type;
 
