@@ -83,7 +83,7 @@ const git = (
     const result = yield* driver.execute({
       operation: "GitVcsDriver.test.git",
       cwd,
-      args,
+      args: ["-c", "safe.bareRepository=all", ...args],
       ...(env ? { env } : {}),
       timeoutMs: 10_000,
     });

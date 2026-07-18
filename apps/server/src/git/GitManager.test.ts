@@ -221,7 +221,7 @@ function runGit(
     const result = yield* git.execute({
       operation: "GitManager.test.runGit",
       cwd,
-      args,
+      args: ["-c", "safe.bareRepository=all", ...args],
       allowNonZeroExit,
     });
     return {
