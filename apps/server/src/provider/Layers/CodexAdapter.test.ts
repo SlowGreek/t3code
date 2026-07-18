@@ -40,6 +40,7 @@ import { ProviderAdapterValidationError } from "../Errors.ts";
 import type { CodexAdapterShape } from "../Services/CodexAdapter.ts";
 import { ProviderSessionDirectory } from "../Services/ProviderSessionDirectory.ts";
 import {
+  type CodexAppServerConnection,
   type CodexSessionRuntimeOptions,
   type CodexSessionRuntimeSendTurnInput,
   type CodexSessionRuntimeShape,
@@ -287,6 +288,49 @@ validationLayer("CodexAdapterLive validation", (it) => {
       });
     }),
   );
+});
+
+it.effect("shares one Codex app-server connection across adapter thread sessions", () => {
+  const runtimeFactory = makeRuntimeFactory();
+  const sharedConnection = {
+    client: {},
+    exitCode: Effect.never,
+  } as unknown as CodexAppServerConnection;
+  const makeConnection = vi.fn(() => Effect.succeed(sharedConnection));
+  const layer = Layer.effect(
+    CodexAdapter,
+    Effect.gen(function* () {
+      const codexConfig = decodeCodexSettings({});
+      return yield* makeCodexAdapter(codexConfig, {
+        makeConnection,
+        makeRuntime: runtimeFactory.factory,
+      });
+    }),
+  ).pipe(
+    Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
+    Layer.provideMerge(ServerSettingsService.layerTest()),
+    Layer.provideMerge(providerSessionDirectoryTestLayer),
+    Layer.provideMerge(NodeServices.layer),
+  );
+
+  return Effect.gen(function* () {
+    const adapter = yield* CodexAdapter;
+    yield* adapter.startSession({
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("shared-thread-1"),
+      runtimeMode: "full-access",
+    });
+    yield* adapter.startSession({
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("shared-thread-2"),
+      runtimeMode: "full-access",
+    });
+
+    NodeAssert.equal(makeConnection.mock.calls.length, 1);
+    NodeAssert.equal(runtimeFactory.factory.mock.calls.length, 2);
+    NodeAssert.strictEqual(runtimeFactory.factory.mock.calls[0]?.[0].connection, sharedConnection);
+    NodeAssert.strictEqual(runtimeFactory.factory.mock.calls[1]?.[0].connection, sharedConnection);
+  }).pipe(Effect.provide(layer));
 });
 
 const sessionRuntimeFactory = makeRuntimeFactory();

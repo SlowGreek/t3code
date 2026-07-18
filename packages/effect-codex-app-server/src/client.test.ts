@@ -33,6 +33,8 @@ it.layer(NodeServices.layer)("effect-codex-app-server client", (it) => {
     Effect.gen(function* () {
       const userInputRequests = yield* Ref.make<Array<unknown>>([]);
       const messageDeltas = yield* Ref.make<Array<unknown>>([]);
+      const misroutedRequests = yield* Ref.make(0);
+      const misroutedNotifications = yield* Ref.make(0);
       const handle = yield* makeHandle();
       const scope = yield* Scope.make();
       const clientLayer = CodexClient.layerChildProcess(handle);
@@ -41,20 +43,40 @@ it.layer(NodeServices.layer)("effect-codex-app-server client", (it) => {
       const result = yield* Effect.gen(function* () {
         const client = yield* CodexClient.CodexAppServerClient;
 
-        yield* client.handleServerRequest("item/tool/requestUserInput", (payload) =>
-          Ref.update(userInputRequests, (current) => [...current, payload]).pipe(
-            Effect.as({
-              answers: {
-                approved: {
-                  answers: ["yes"],
+        const unregisterWrongRequestRoute = yield* client.registerServerRequest(
+          "item/tool/requestUserInput",
+          (payload) => payload.threadId === "thread-other",
+          () =>
+            Ref.update(misroutedRequests, (count) => count + 1).pipe(
+              Effect.as({
+                answers: {},
+              }),
+            ),
+        );
+        const unregisterRequestRoute = yield* client.registerServerRequest(
+          "item/tool/requestUserInput",
+          (payload) => payload.threadId === "thread-1",
+          (payload) =>
+            Ref.update(userInputRequests, (current) => [...current, payload]).pipe(
+              Effect.as({
+                answers: {
+                  approved: {
+                    answers: ["yes"],
+                  },
                 },
-              },
-            }),
-          ),
+              }),
+            ),
         );
 
-        yield* client.handleServerNotification("item/agentMessage/delta", (payload) =>
-          Ref.update(messageDeltas, (current) => [...current, payload]),
+        const unregisterWrongNotificationRoute = yield* client.registerServerNotification(
+          "item/agentMessage/delta",
+          (payload) => payload.threadId === "thread-other",
+          () => Ref.update(misroutedNotifications, (count) => count + 1),
+        );
+        const unregisterNotificationRoute = yield* client.registerServerNotification(
+          "item/agentMessage/delta",
+          (payload) => payload.threadId === "thread-1",
+          (payload) => Ref.update(messageDeltas, (current) => [...current, payload]),
         );
 
         const initialized = yield* client.request("initialize", {
@@ -85,6 +107,15 @@ it.layer(NodeServices.layer)("effect-codex-app-server client", (it) => {
         const skills = yield* client.request("skills/list", { cwds: [peerCwd] });
         assert.equal(skills.data.length, 1);
         assert.equal(skills.data[0]?.cwd, peerCwd);
+        yield* Effect.all(
+          [
+            unregisterWrongRequestRoute,
+            unregisterRequestRoute,
+            unregisterWrongNotificationRoute,
+            unregisterNotificationRoute,
+          ],
+          { discard: true },
+        );
 
         return {
           account,
@@ -93,6 +124,8 @@ it.layer(NodeServices.layer)("effect-codex-app-server client", (it) => {
       }).pipe(Effect.provide(context), Effect.ensuring(Scope.close(scope, Exit.void)));
 
       assert.equal(result.skills.data[0]?.skills.length, 0);
+      assert.equal(yield* Ref.get(misroutedRequests), 0);
+      assert.equal(yield* Ref.get(misroutedNotifications), 0);
       assert.deepEqual(yield* Ref.get(userInputRequests), [
         {
           itemId: "item-approval-1",
