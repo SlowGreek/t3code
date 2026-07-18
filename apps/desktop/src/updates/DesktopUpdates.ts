@@ -217,7 +217,7 @@ function shouldBroadcastDownloadProgress(
   return nextStep !== previousStep || nextPercent === 100;
 }
 
-function getAutoUpdateDisabledReason(args: {
+export function getAutoUpdateDisabledReason(args: {
   isDevelopment: boolean;
   isPackaged: boolean;
   platform: NodeJS.Platform;
