@@ -35,6 +35,8 @@ Forking an active Codex thread calls native `thread/fork`, creates separate T3 G
 
 The native thread browser queries `thread/list` with app-server search and archive filters. Linking an inactive conversation creates only T3 GUI metadata plus its persisted provider cursor; Codex remains authoritative for the conversation history.
 
+The pinned generated app-server protocol does not expose thread-scoped settings, arbitrary metadata, or memory-mode mutation methods. T3 intentionally does not simulate those operations. Newly added provider methods remain visible through `runtime.raw` and should receive typed native wiring when they enter the generated protocol.
+
 Typed app-server callbacks cover MCP elicitation, granular permission approval, dynamic client tools, current-time reads, and token refresh compatibility. Unknown requests receive a visible method-not-found response instead of hanging. Unknown notifications and newly introduced Codex events are retained through the typed `runtime.raw` extension channel and rendered in the thread activity log.
 
 Codex question metadata is preserved for optionless free text, Other answers, secrets, mixed question sets, and MCP multi-select fields. Secret answers use a password control and are never rendered as visible composer text.
