@@ -29,6 +29,14 @@ At initialization T3 probes `collaborationMode/list` over the raw app-server cha
 
 T3-only metadata (workspace presentation, local checkpoints, and GUI state) remains in T3 persistence. It must not replace or synthesize Codex lifecycle state when the app-server provides an authoritative operation.
 
+Native app-server archive, unarchive, delete, rename, compact, and review operations are used for active Codex threads. Review targets include uncommitted changes, a base branch, one commit, or custom instructions, with inline or detached delivery.
+
+Typed app-server callbacks cover MCP elicitation, granular permission approval, dynamic client tools, current-time reads, and token refresh compatibility. Unknown requests receive a visible method-not-found response instead of hanging. Unknown notifications and newly introduced Codex events are retained through the typed `runtime.raw` extension channel and rendered in the thread activity log.
+
+Codex question metadata is preserved for optionless free text, Other answers, secrets, mixed question sets, and MCP multi-select fields. Secret answers use a password control and are never rendered as visible composer text.
+
+The command palette exposes native MCP management for an active Codex thread. Inventory, OAuth initiation/completion notifications, resource reads, direct tool invocation, server reload, and per-server enablement all use the shared app-server connection. Direct invocation requires an explicit per-server trust confirmation each time; T3 does not persist that confirmation or bypass Codex approval policy.
+
 When T3 creates a Git worktree it can apply the source checkout's current tracked diff with `applyCurrentChanges`. It also copies ignored `AGENTS.override.md` automatically. A repository may list additional untracked local files or directories in `.worktreeinclude`, one repository-relative path per line. Blank lines and `#` comments are ignored; absolute and parent-traversal paths are rejected.
 
 Managed cleanup callers can pass `snapshotPath` when removing a worktree. T3 copies the complete worktree before removal and rejects snapshot destinations inside the worktree. A subsequent create can pass `restoreSnapshotPath`; T3 restores the snapshot while preserving the new linked-worktree `.git` metadata.

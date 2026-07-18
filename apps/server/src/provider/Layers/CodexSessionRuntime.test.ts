@@ -343,6 +343,8 @@ describe("MCP elicitation", () => {
         header: "Name",
         question: "Deployment name",
         options: [],
+        allowOther: true,
+        isSecret: false,
         multiSelect: false,
       },
       {
@@ -353,6 +355,8 @@ describe("MCP elicitation", () => {
           { label: "us-east", description: "us-east" },
           { label: "eu-west", description: "eu-west" },
         ],
+        allowOther: false,
+        isSecret: false,
         multiSelect: true,
       },
       {
@@ -363,6 +367,8 @@ describe("MCP elicitation", () => {
           { label: "Yes", description: "Yes" },
           { label: "No", description: "No" },
         ],
+        allowOther: false,
+        isSecret: false,
         multiSelect: false,
       },
     ]);
