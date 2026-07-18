@@ -45,6 +45,8 @@ When T3 creates a Git worktree it can apply the source checkout's current tracke
 
 Managed cleanup callers can pass `snapshotPath` when removing a worktree. T3 copies the complete worktree before removal and rejects snapshot destinations inside the worktree. A subsequent create can pass `restoreSnapshotPath`; T3 restores the snapshot while preserving the new linked-worktree `.git` metadata.
 
+Worktrees created without an explicit destination are reported as `managed`; explicit destination paths are `permanent`. Callers must not infer ownership from path text. Permanent worktrees are removed only by an explicit user action, while managed cleanup uses snapshot-before-remove.
+
 ## Security posture
 
 - Desktop and server listeners bind to `127.0.0.1`.

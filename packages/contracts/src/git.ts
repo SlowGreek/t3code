@@ -86,6 +86,7 @@ export type VcsRef = typeof VcsRef.Type;
 const VcsWorktree = Schema.Struct({
   path: TrimmedNonEmptyStringSchema,
   refName: TrimmedNonEmptyStringSchema,
+  ownership: Schema.Literals(["managed", "permanent"]),
 });
 const GitResolvedPullRequest = Schema.Struct({
   number: PositiveInt,

@@ -2442,6 +2442,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       worktree: {
         path: worktreePath,
         refName: targetBranch,
+        ownership: input.path === undefined ? "managed" : "permanent",
       },
     };
   });

@@ -685,6 +685,7 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
 
         assert.equal(created.worktree.path, worktreePath);
         assert.equal(created.worktree.refName, "feature/worktree");
+        assert.equal(created.worktree.ownership, "permanent");
         assert.equal(yield* git(worktreePath, ["branch", "--show-current"]), "feature/worktree");
         assert.equal(
           yield* fileSystem.readFileString(pathService.join(worktreePath, "README.md")),

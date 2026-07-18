@@ -4939,7 +4939,11 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               }),
             createWorktree: () =>
               Effect.succeed({
-                worktree: { path: "/tmp/wt", refName: "feature/demo" },
+                worktree: {
+                  path: "/tmp/wt",
+                  refName: "feature/demo",
+                  ownership: "managed" as const,
+                },
               }),
             removeWorktree: () => Effect.void,
             createRef: (input) => Effect.succeed({ refName: input.refName }),
@@ -6203,6 +6207,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 worktree: {
                   refName: "t3code/bootstrap-refName",
                   path: "/tmp/bootstrap-worktree",
+                  ownership: "managed" as const,
                 },
               };
             }),
@@ -6352,6 +6357,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             worktree: {
               refName: "t3code/bootstrap-refName",
               path: "/tmp/bootstrap-worktree",
+              ownership: "managed" as const,
             },
           }),
       );
@@ -6457,6 +6463,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             worktree: {
               refName: "t3code/bootstrap-refName",
               path: "/tmp/bootstrap-worktree",
+              ownership: "managed" as const,
             },
           }),
       );
