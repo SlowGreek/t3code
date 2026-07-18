@@ -113,6 +113,7 @@ import { resolveEnvironmentOptionLabel } from "./BranchToolbar.logic";
 import { CommandPaletteResults } from "./CommandPaletteResults";
 import { AzureDevOpsIcon, BitbucketIcon, GitHubIcon, GitLabIcon } from "./Icons";
 import { ProjectFavicon } from "./ProjectFavicon";
+import { ReviewStartDialog } from "./ReviewStartDialog";
 import { ThreadRowLeadingStatus, ThreadRowTrailingStatus } from "./ThreadStatusIndicators";
 import { primaryServerKeybindingsAtom } from "../state/server";
 import { resolveShortcutCommand } from "../keybindings";
@@ -490,6 +491,7 @@ function OpenCommandPaletteDialog(props: {
   const [addProjectCloneFlow, setAddProjectCloneFlow] = useState<AddProjectCloneFlow | null>(null);
   const [isRemoteProjectLookingUp, setIsRemoteProjectLookingUp] = useState(false);
   const [isRemoteProjectCloning, setIsRemoteProjectCloning] = useState(false);
+  const [reviewDialogOpen, setReviewDialogOpen] = useState(false);
   const primaryEnvironmentId = primaryEnvironment?.environmentId ?? null;
 
   const addProjectEnvironmentOptions = useMemo(() => {
@@ -1063,30 +1065,15 @@ function OpenCommandPaletteDialog(props: {
     });
     actionItems.push({
       kind: "action",
-      value: "action:review-uncommitted",
-      searchTerms: ["review", "uncommitted", "changes", "codex", "inline"],
-      title: "Review uncommitted changes",
-      description: "Start a native Codex review in the current thread.",
+      value: "action:start-review",
+      searchTerms: ["review", "uncommitted", "base", "branch", "commit", "custom", "codex"],
+      title: "Start Codex review...",
+      description: "Choose the target, instructions, and review delivery.",
       icon: <FileSearchIcon className={ITEM_ICON_CLASS} />,
-      run: async () => {
-        await startReview(scopeThreadRef(activeThread.environmentId, activeThread.id), {
-          target: { type: "uncommittedChanges" },
-          delivery: "inline",
-        });
-      },
-    });
-    actionItems.push({
-      kind: "action",
-      value: "action:review-uncommitted-detached",
-      searchTerms: ["review", "uncommitted", "changes", "codex", "detached"],
-      title: "Review uncommitted changes in a new thread",
-      description: "Start a detached native Codex review.",
-      icon: <FileSearchIcon className={ITEM_ICON_CLASS} />,
-      run: async () => {
-        await startReview(scopeThreadRef(activeThread.environmentId, activeThread.id), {
-          target: { type: "uncommittedChanges" },
-          delivery: "detached",
-        });
+      keepOpen: true,
+      run: () => {
+        setReviewDialogOpen(true);
+        return Promise.resolve();
       },
     });
   }
@@ -1701,234 +1688,250 @@ function OpenCommandPaletteDialog(props: {
   ]);
 
   return (
-    <CommandDialogPopup
-      aria-label="Command palette"
-      className="overflow-hidden p-0"
-      data-command-palette="true"
-      data-testid="command-palette"
-      finalFocus={() => {
-        composerHandleRef?.current?.focusAtEnd();
-        return false;
-      }}
-      onBackdropPointerDown={() => {
-        setOpen(false);
-      }}
-    >
-      <Command
-        key={`${viewStack.length}-${browseGeneration}-${isBrowsing}-${addProjectCloneFlow?.step ?? "none"}`}
+    <>
+      <CommandDialogPopup
         aria-label="Command palette"
-        autoHighlight={isBrowsing || isRemoteProjectCloneFlow ? false : "always"}
-        mode="none"
-        onItemHighlighted={(value) => {
-          setHighlightedItemValue(typeof value === "string" ? value : null);
+        className="overflow-hidden p-0"
+        data-command-palette="true"
+        data-testid="command-palette"
+        finalFocus={() => {
+          composerHandleRef?.current?.focusAtEnd();
+          return false;
         }}
-        onValueChange={handleQueryChange}
-        value={query}
+        onBackdropPointerDown={() => {
+          setOpen(false);
+        }}
       >
-        <div className="relative">
-          <CommandInput
-            className={
-              addProjectCloneFlow?.step === "repository"
-                ? "pe-32"
-                : isBrowsing
-                  ? willCreateProjectPath
-                    ? "pe-36"
-                    : "pe-16"
+        <Command
+          key={`${viewStack.length}-${browseGeneration}-${isBrowsing}-${addProjectCloneFlow?.step ?? "none"}`}
+          aria-label="Command palette"
+          autoHighlight={isBrowsing || isRemoteProjectCloneFlow ? false : "always"}
+          mode="none"
+          onItemHighlighted={(value) => {
+            setHighlightedItemValue(typeof value === "string" ? value : null);
+          }}
+          onValueChange={handleQueryChange}
+          value={query}
+        >
+          <div className="relative">
+            <CommandInput
+              className={
+                addProjectCloneFlow?.step === "repository"
+                  ? "pe-32"
+                  : isBrowsing
+                    ? willCreateProjectPath
+                      ? "pe-36"
+                      : "pe-16"
+                    : undefined
+              }
+              placeholder={inputPlaceholder}
+              wrapperClassName={
+                isSubmenu
+                  ? "[&_[data-slot=autocomplete-start-addon]]:pointer-events-auto"
                   : undefined
-            }
-            placeholder={inputPlaceholder}
-            wrapperClassName={
-              isSubmenu ? "[&_[data-slot=autocomplete-start-addon]]:pointer-events-auto" : undefined
-            }
-            {...(isSubmenu
-              ? {
-                  startAddon: (
-                    <button
-                      type="button"
-                      className="flex cursor-pointer items-center"
-                      aria-label="Back"
-                      onClick={popView}
-                    >
-                      <ArrowLeftIcon />
-                    </button>
-                  ),
-                }
-              : isBrowsing && !isSubmenu
+              }
+              {...(isSubmenu
                 ? {
-                    startAddon: <FolderPlusIcon />,
+                    startAddon: (
+                      <button
+                        type="button"
+                        className="flex cursor-pointer items-center"
+                        aria-label="Back"
+                        onClick={popView}
+                      >
+                        <ArrowLeftIcon />
+                      </button>
+                    ),
                   }
-                : {})}
-            onKeyDown={handleKeyDown}
-          />
-          {addProjectCloneFlow?.step === "repository" ? (
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Button
-                    variant="outline"
-                    size="xs"
-                    tabIndex={-1}
-                    className="absolute inset-e-2.5 top-1/2 gap-1.5 pe-1 ps-2 -translate-y-1/2"
-                    aria-label={`${remoteProjectButtonLabel ?? "Continue"} (Enter)`}
-                    disabled={!canSubmitRemoteProjectFlow}
-                    onMouseDown={(event) => {
-                      event.preventDefault();
-                    }}
-                    onClick={() => {
-                      void submitAddProjectCloneFlow();
-                    }}
-                  />
-                }
-              >
-                <span>{isRemoteProjectPending ? "Working" : remoteProjectButtonLabel}</span>
-                <KbdGroup className="pointer-events-none -me-0.5 items-center gap-1">
-                  <Kbd>Enter</Kbd>
-                </KbdGroup>
-              </TooltipTrigger>
-              <TooltipPopup side="top">
-                {remoteProjectButtonLabel ?? "Continue"} (Enter)
-              </TooltipPopup>
-            </Tooltip>
-          ) : isBrowsing ? (
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Button
-                    variant="outline"
-                    size="xs"
-                    tabIndex={-1}
-                    className={cn(
-                      "absolute inset-e-2.5 top-1/2 pe-1 ps-2 -translate-y-1/2",
-                      hasHighlightedBrowseItem ? "gap-1" : "gap-1.5",
-                    )}
-                    aria-label={`${submitActionLabel} (${addShortcutLabel})`}
-                    disabled={
-                      relativePathNeedsActiveProject ||
-                      (isCloneDestinationStep && isRemoteProjectPending)
+                : isBrowsing && !isSubmenu
+                  ? {
+                      startAddon: <FolderPlusIcon />,
                     }
-                    onMouseDown={(event) => {
-                      event.preventDefault();
-                    }}
-                    onClick={() => {
-                      if (relativePathNeedsActiveProject) {
-                        return;
-                      }
-                      if (isCloneDestinationStep) {
-                        void submitAddProjectCloneFlow(resolvedAddProjectPath);
-                      } else {
-                        void handleAddProject(resolvedAddProjectPath);
-                      }
-                    }}
-                  />
-                }
-              >
-                <span>
-                  {isCloneDestinationStep && isRemoteProjectPending ? "Cloning" : submitActionLabel}
-                </span>
-                <KbdGroup className="pointer-events-none -me-0.5 items-center gap-1">
-                  <Kbd>{hasHighlightedBrowseItem ? `${submitModifierLabel} Enter` : "Enter"}</Kbd>
-                </KbdGroup>
-              </TooltipTrigger>
-              <TooltipPopup side="top">
-                {submitActionLabel} ({addShortcutLabel})
-              </TooltipPopup>
-            </Tooltip>
-          ) : null}
-        </div>
-        <CommandPanel className="max-h-[min(28rem,70vh)]">
-          {remoteProjectContext ? (
-            <div className="p-2 pb-0">
-              <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">
-                Repository
-              </div>
-              <div className="flex min-h-8 items-center gap-2 rounded-sm px-2 py-1.5">
-                {remoteProjectContext.icon}
-                <span className="flex min-w-0 flex-1 flex-col">
-                  <span className="truncate text-foreground text-sm">
-                    {remoteProjectContext.title}
-                  </span>
-                  <span className="truncate text-muted-foreground/70 text-xs">
-                    {remoteProjectContext.description}
-                  </span>
-                </span>
-              </div>
-            </div>
-          ) : null}
-          <CommandPaletteResults
-            groups={displayedGroups}
-            highlightedItemValue={highlightedItemValue}
-            isActionsOnly={isActionsOnly}
-            keybindings={keybindings}
-            onExecuteItem={executeItem}
-            {...(addProjectCloneFlow?.step === "repository"
-              ? {
-                  emptyStateMessage:
-                    addProjectCloneFlow.source === "url"
-                      ? "Enter a Git clone URL and press Enter to continue."
-                      : "Enter a repository path and press Enter to look it up.",
-                }
-              : addProjectCloneFlow?.step === "confirm"
-                ? { emptyStateMessage: "Choose a destination path and press Enter to clone." }
-                : relativePathNeedsActiveProject
-                  ? { emptyStateMessage: "Relative paths require an active project." }
-                  : willCreateProjectPath
-                    ? {
-                        emptyStateMessage:
-                          "Press Enter to create this folder and add it as a project.",
-                      }
-                    : {})}
-          />
-        </CommandPanel>
-        <CommandFooter className="gap-3 max-sm:flex-col max-sm:items-start">
-          <div className="flex items-center gap-3">
-            <KbdGroup className="items-center gap-1.5">
-              <Kbd>
-                <ArrowUpIcon />
-              </Kbd>
-              <Kbd>
-                <ArrowDownIcon />
-              </Kbd>
-              <span className={cn("text-muted-foreground/80")}>Navigate</span>
-            </KbdGroup>
+                  : {})}
+              onKeyDown={handleKeyDown}
+            />
             {addProjectCloneFlow?.step === "repository" ? (
-              <KbdGroup className="items-center gap-1.5">
-                <Kbd>Enter</Kbd>
-                <span className={cn("text-muted-foreground/80")}>
-                  {remoteProjectButtonLabel ?? "Continue"}
-                </span>
-              </KbdGroup>
-            ) : !canSubmitBrowsePath || hasHighlightedBrowseItem ? (
-              <KbdGroup className="items-center gap-1.5">
-                <Kbd>Enter</Kbd>
-                <span className={cn("text-muted-foreground/80")}>Select</span>
-              </KbdGroup>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      variant="outline"
+                      size="xs"
+                      tabIndex={-1}
+                      className="absolute inset-e-2.5 top-1/2 gap-1.5 pe-1 ps-2 -translate-y-1/2"
+                      aria-label={`${remoteProjectButtonLabel ?? "Continue"} (Enter)`}
+                      disabled={!canSubmitRemoteProjectFlow}
+                      onMouseDown={(event) => {
+                        event.preventDefault();
+                      }}
+                      onClick={() => {
+                        void submitAddProjectCloneFlow();
+                      }}
+                    />
+                  }
+                >
+                  <span>{isRemoteProjectPending ? "Working" : remoteProjectButtonLabel}</span>
+                  <KbdGroup className="pointer-events-none -me-0.5 items-center gap-1">
+                    <Kbd>Enter</Kbd>
+                  </KbdGroup>
+                </TooltipTrigger>
+                <TooltipPopup side="top">
+                  {remoteProjectButtonLabel ?? "Continue"} (Enter)
+                </TooltipPopup>
+              </Tooltip>
+            ) : isBrowsing ? (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      variant="outline"
+                      size="xs"
+                      tabIndex={-1}
+                      className={cn(
+                        "absolute inset-e-2.5 top-1/2 pe-1 ps-2 -translate-y-1/2",
+                        hasHighlightedBrowseItem ? "gap-1" : "gap-1.5",
+                      )}
+                      aria-label={`${submitActionLabel} (${addShortcutLabel})`}
+                      disabled={
+                        relativePathNeedsActiveProject ||
+                        (isCloneDestinationStep && isRemoteProjectPending)
+                      }
+                      onMouseDown={(event) => {
+                        event.preventDefault();
+                      }}
+                      onClick={() => {
+                        if (relativePathNeedsActiveProject) {
+                          return;
+                        }
+                        if (isCloneDestinationStep) {
+                          void submitAddProjectCloneFlow(resolvedAddProjectPath);
+                        } else {
+                          void handleAddProject(resolvedAddProjectPath);
+                        }
+                      }}
+                    />
+                  }
+                >
+                  <span>
+                    {isCloneDestinationStep && isRemoteProjectPending
+                      ? "Cloning"
+                      : submitActionLabel}
+                  </span>
+                  <KbdGroup className="pointer-events-none -me-0.5 items-center gap-1">
+                    <Kbd>{hasHighlightedBrowseItem ? `${submitModifierLabel} Enter` : "Enter"}</Kbd>
+                  </KbdGroup>
+                </TooltipTrigger>
+                <TooltipPopup side="top">
+                  {submitActionLabel} ({addShortcutLabel})
+                </TooltipPopup>
+              </Tooltip>
             ) : null}
-            {isSubmenu ? (
-              <KbdGroup className="items-center gap-1.5">
-                <Kbd>Backspace</Kbd>
-                <span className={cn("text-muted-foreground/80")}>Back</span>
-              </KbdGroup>
-            ) : null}
-            <KbdGroup className="items-center gap-1.5">
-              <Kbd>Esc</Kbd>
-              <span className={cn("text-muted-foreground/80")}>Close</span>
-            </KbdGroup>
           </div>
-          {canOpenProjectFromFileManager ? (
-            <Button
-              variant="ghost"
-              size="xs"
-              className="h-auto px-2 text-xs text-muted-foreground/80 hover:bg-transparent hover:text-foreground"
-              disabled={isPickingProjectFolder}
-              onClick={() => {
-                void handleOpenProjectFromFileManager();
-              }}
-            >
-              {`Open in ${fileManagerName}`}
-            </Button>
-          ) : null}
-        </CommandFooter>
-      </Command>
-    </CommandDialogPopup>
+          <CommandPanel className="max-h-[min(28rem,70vh)]">
+            {remoteProjectContext ? (
+              <div className="p-2 pb-0">
+                <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">
+                  Repository
+                </div>
+                <div className="flex min-h-8 items-center gap-2 rounded-sm px-2 py-1.5">
+                  {remoteProjectContext.icon}
+                  <span className="flex min-w-0 flex-1 flex-col">
+                    <span className="truncate text-foreground text-sm">
+                      {remoteProjectContext.title}
+                    </span>
+                    <span className="truncate text-muted-foreground/70 text-xs">
+                      {remoteProjectContext.description}
+                    </span>
+                  </span>
+                </div>
+              </div>
+            ) : null}
+            <CommandPaletteResults
+              groups={displayedGroups}
+              highlightedItemValue={highlightedItemValue}
+              isActionsOnly={isActionsOnly}
+              keybindings={keybindings}
+              onExecuteItem={executeItem}
+              {...(addProjectCloneFlow?.step === "repository"
+                ? {
+                    emptyStateMessage:
+                      addProjectCloneFlow.source === "url"
+                        ? "Enter a Git clone URL and press Enter to continue."
+                        : "Enter a repository path and press Enter to look it up.",
+                  }
+                : addProjectCloneFlow?.step === "confirm"
+                  ? { emptyStateMessage: "Choose a destination path and press Enter to clone." }
+                  : relativePathNeedsActiveProject
+                    ? { emptyStateMessage: "Relative paths require an active project." }
+                    : willCreateProjectPath
+                      ? {
+                          emptyStateMessage:
+                            "Press Enter to create this folder and add it as a project.",
+                        }
+                      : {})}
+            />
+          </CommandPanel>
+          <CommandFooter className="gap-3 max-sm:flex-col max-sm:items-start">
+            <div className="flex items-center gap-3">
+              <KbdGroup className="items-center gap-1.5">
+                <Kbd>
+                  <ArrowUpIcon />
+                </Kbd>
+                <Kbd>
+                  <ArrowDownIcon />
+                </Kbd>
+                <span className={cn("text-muted-foreground/80")}>Navigate</span>
+              </KbdGroup>
+              {addProjectCloneFlow?.step === "repository" ? (
+                <KbdGroup className="items-center gap-1.5">
+                  <Kbd>Enter</Kbd>
+                  <span className={cn("text-muted-foreground/80")}>
+                    {remoteProjectButtonLabel ?? "Continue"}
+                  </span>
+                </KbdGroup>
+              ) : !canSubmitBrowsePath || hasHighlightedBrowseItem ? (
+                <KbdGroup className="items-center gap-1.5">
+                  <Kbd>Enter</Kbd>
+                  <span className={cn("text-muted-foreground/80")}>Select</span>
+                </KbdGroup>
+              ) : null}
+              {isSubmenu ? (
+                <KbdGroup className="items-center gap-1.5">
+                  <Kbd>Backspace</Kbd>
+                  <span className={cn("text-muted-foreground/80")}>Back</span>
+                </KbdGroup>
+              ) : null}
+              <KbdGroup className="items-center gap-1.5">
+                <Kbd>Esc</Kbd>
+                <span className={cn("text-muted-foreground/80")}>Close</span>
+              </KbdGroup>
+            </div>
+            {canOpenProjectFromFileManager ? (
+              <Button
+                variant="ghost"
+                size="xs"
+                className="h-auto px-2 text-xs text-muted-foreground/80 hover:bg-transparent hover:text-foreground"
+                disabled={isPickingProjectFolder}
+                onClick={() => {
+                  void handleOpenProjectFromFileManager();
+                }}
+              >
+                {`Open in ${fileManagerName}`}
+              </Button>
+            ) : null}
+          </CommandFooter>
+        </Command>
+      </CommandDialogPopup>
+      {activeThread ? (
+        <ReviewStartDialog
+          open={reviewDialogOpen}
+          onOpenChange={setReviewDialogOpen}
+          onStart={async (input) => {
+            await startReview(scopeThreadRef(activeThread.environmentId, activeThread.id), input);
+            setOpen(false);
+          }}
+        />
+      ) : null}
+    </>
   );
 }
