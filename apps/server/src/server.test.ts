@@ -1236,7 +1236,20 @@ const getWsServerUrl = (
     );
   });
 
-it.layer(NodeServices.layer)("server router seam", (it) => {
+it.layer(NodeServices.layer)("server router seam", (baseIt) => {
+  const sequentialEffect = ((
+    name: string,
+    self: Parameters<typeof baseIt.effect>[1],
+    options?: Parameters<typeof baseIt.effect>[2],
+  ) =>
+    baseIt.effect(
+      name,
+      self,
+      typeof options === "number"
+        ? { timeout: options, concurrent: false }
+        : { ...options, concurrent: false },
+    )) as typeof baseIt.effect;
+  const it = { effect: sequentialEffect };
   it.effect("serves static index content for GET / when staticDir is configured", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
