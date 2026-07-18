@@ -2285,6 +2285,25 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       fallbackErrorDetail: "git worktree add failed",
     });
 
+    if (input.applyCurrentChanges) {
+      const patch = yield* runGitStdout("GitVcsDriver.createWorktree.captureChanges", input.cwd, [
+        "diff",
+        "--binary",
+        "HEAD",
+      ]);
+      if (patch.length > 0) {
+        yield* executeGit(
+          "GitVcsDriver.createWorktree.applyChanges",
+          worktreePath,
+          ["apply", "--whitespace=nowarn", "-"],
+          {
+            stdin: patch,
+            fallbackErrorDetail: "failed to apply current changes to worktree",
+          },
+        );
+      }
+    }
+
     const fileOperationError = (operation: string, detail: string, cause: unknown) =>
       new GitCommandError({
         operation,

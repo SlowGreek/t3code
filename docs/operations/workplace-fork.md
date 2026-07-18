@@ -27,7 +27,7 @@ Each configured local Codex environment owns one long-lived `codex app-server` p
 
 T3-only metadata (workspace presentation, local checkpoints, and GUI state) remains in T3 persistence. It must not replace or synthesize Codex lifecycle state when the app-server provides an authoritative operation.
 
-When T3 creates a Git worktree it copies ignored `AGENTS.override.md` automatically. A repository may list additional untracked local files or directories in `.worktreeinclude`, one repository-relative path per line. Blank lines and `#` comments are ignored; absolute and parent-traversal paths are rejected.
+When T3 creates a Git worktree it can apply the source checkout's current tracked diff with `applyCurrentChanges`. It also copies ignored `AGENTS.override.md` automatically. A repository may list additional untracked local files or directories in `.worktreeinclude`, one repository-relative path per line. Blank lines and `#` comments are ignored; absolute and parent-traversal paths are rejected.
 
 Managed cleanup callers can pass `snapshotPath` when removing a worktree. T3 copies the complete worktree before removal and rejects snapshot destinations inside the worktree. A subsequent create can pass `restoreSnapshotPath`; T3 restores the snapshot while preserving the new linked-worktree `.git` metadata.
 

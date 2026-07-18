@@ -669,6 +669,8 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
           "feature-worktree",
         );
         const driver = yield* GitVcsDriver.GitVcsDriver;
+        const fileSystem = yield* FileSystem.FileSystem;
+        yield* writeTextFile(cwd, "README.md", "# locally modified\n");
         yield* writeTextFile(cwd, ".worktreeinclude", ".env.local\n");
         yield* writeTextFile(cwd, ".env.local", "LOCAL_ONLY=1\n");
         yield* writeTextFile(cwd, "AGENTS.override.md", "Local agent guidance\n");
@@ -678,12 +680,16 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
           path: worktreePath,
           refName: initialBranch,
           newRefName: "feature/worktree",
+          applyCurrentChanges: true,
         });
 
         assert.equal(created.worktree.path, worktreePath);
         assert.equal(created.worktree.refName, "feature/worktree");
         assert.equal(yield* git(worktreePath, ["branch", "--show-current"]), "feature/worktree");
-        const fileSystem = yield* FileSystem.FileSystem;
+        assert.equal(
+          yield* fileSystem.readFileString(pathService.join(worktreePath, "README.md")),
+          "# locally modified\n",
+        );
         assert.equal(
           yield* fileSystem.readFileString(pathService.join(worktreePath, ".env.local")),
           "LOCAL_ONLY=1\n",

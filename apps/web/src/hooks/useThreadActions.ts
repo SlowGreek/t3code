@@ -200,7 +200,7 @@ export function useThreadActions() {
               "This thread is the only one linked to this worktree:",
               displayWorktreePath ?? orphanedWorktreePath,
               "",
-              "Delete the worktree too?",
+              "Snapshot and remove the worktree too?",
             ].join("\n"),
           ),
         );
@@ -288,12 +288,14 @@ export function useThreadActions() {
         return deleteResult;
       }
 
+      const snapshotPath = `${orphanedWorktreePath}.t3-snapshot-${threadRef.threadId}`;
       const removeResult = await removeWorktree({
         environmentId: threadRef.environmentId,
         input: {
           cwd: threadProject.workspaceRoot,
           path: orphanedWorktreePath,
           force: true,
+          snapshotPath,
         },
       });
       const refreshResult =
@@ -327,6 +329,13 @@ export function useThreadActions() {
         );
         return cleanupFailure;
       }
+      toastManager.add(
+        stackedThreadToast({
+          type: "success",
+          title: "Worktree snapshot saved",
+          description: `Saved recoverable state to ${snapshotPath}.`,
+        }),
+      );
       return deleteResult;
     },
     [
