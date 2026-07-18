@@ -374,6 +374,8 @@ function toUserInputQuestions(questions: ReadonlyArray<CodexToolUserInputQuestio
         options,
         allowOther: question.isOther ?? options.length === 0,
         isSecret: question.isSecret ?? false,
+        // The generated request_user_input question has no multi-select field.
+        // MCP elicitation array schemas are projected separately with multiSelect=true.
         multiSelect: false,
       };
     })

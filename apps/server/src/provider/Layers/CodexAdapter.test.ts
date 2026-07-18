@@ -33,6 +33,7 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as CodexErrors from "effect-codex-app-server/errors";
+import * as EffectCodexSchema from "effect-codex-app-server/schema";
 
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
@@ -58,6 +59,9 @@ const asThreadId = (value: string): ThreadId => ThreadId.make(value);
 const asTurnId = (value: string): TurnId => TurnId.make(value);
 const asEventId = (value: string): EventId => EventId.make(value);
 const asItemId = (value: string): ProviderItemId => ProviderItemId.make(value);
+const generatedRequestUserInputSupportsMultiSelect: "multiSelect" extends keyof EffectCodexSchema.ToolRequestUserInputParams__ToolRequestUserInputQuestion
+  ? true
+  : false = false;
 
 class FakeCodexRuntime implements CodexSessionRuntimeShape {
   private readonly eventQueue = Effect.runSync(Queue.unbounded<ProviderEvent>());
@@ -1145,6 +1149,7 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
         const events = Array.from(yield* Fiber.join(eventsFiber));
         NodeAssert.equal(events[0]?.type, "user-input.requested");
         if (events[0]?.type === "user-input.requested") {
+          NodeAssert.equal(generatedRequestUserInputSupportsMultiSelect, false);
           NodeAssert.equal(events[0].requestId, "req-user-input-1");
           NodeAssert.equal(events[0].payload.questions[0]?.id, "sandbox_mode");
           NodeAssert.equal(events[0].payload.questions[0]?.multiSelect, false);

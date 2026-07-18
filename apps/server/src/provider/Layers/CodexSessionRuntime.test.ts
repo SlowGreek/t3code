@@ -287,14 +287,38 @@ describe("Codex turn steering", () => {
         threadId: "provider-thread-1",
         expectedTurnId: "turn-active",
         clientUserMessageId: "message-2",
-        turnInput: [{ type: "text", text: "Use the other approach" }],
+        turnInput: [
+          { type: "text", text: "Use the other approach" },
+          {
+            type: "skill",
+            name: "frontend-design",
+            path: "/skills/frontend-design/SKILL.md",
+          },
+          {
+            type: "mention",
+            name: "App.tsx",
+            path: "apps/web/src/App.tsx",
+          },
+        ],
       });
 
       NodeAssert.deepStrictEqual(params, {
         threadId: "provider-thread-1",
         expectedTurnId: "turn-active",
         clientUserMessageId: "message-2",
-        input: [{ type: "text", text: "Use the other approach" }],
+        input: [
+          { type: "text", text: "Use the other approach" },
+          {
+            type: "skill",
+            name: "frontend-design",
+            path: "/skills/frontend-design/SKILL.md",
+          },
+          {
+            type: "mention",
+            name: "App.tsx",
+            path: "apps/web/src/App.tsx",
+          },
+        ],
       });
     }),
   );

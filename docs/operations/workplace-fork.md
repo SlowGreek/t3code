@@ -43,6 +43,8 @@ Typed app-server callbacks cover MCP elicitation, granular permission approval, 
 
 Codex question metadata is preserved for optionless free text, Other answers, secrets, mixed question sets, and MCP multi-select fields. Secret answers use a password control and are never rendered as visible composer text.
 
+The generated `item/tool/requestUserInput` question type has no multi-select field and is intentionally projected as single-select. Multi-select is native for MCP elicitation array schemas and is preserved there; a compile-time schema assertion guards this protocol distinction.
+
 Composer `$skill` selections and local markdown file links are resolved against the active provider snapshot and sent as native Codex `skill` and `mention` user-input entries. The original text remains intact for display and non-Codex providers; disabled/unknown skills and external links are not promoted to trusted structured inputs.
 
 The command palette exposes native MCP management for an active Codex thread. Inventory, OAuth initiation/completion notifications, resource reads, direct tool invocation, server reload, and per-server enablement all use the shared app-server connection. Direct invocation requires an explicit per-server trust confirmation each time; T3 does not persist that confirmation or bypass Codex approval policy.
