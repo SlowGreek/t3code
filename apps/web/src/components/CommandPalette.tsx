@@ -115,6 +115,7 @@ import { CommandPaletteResults } from "./CommandPaletteResults";
 import { AzureDevOpsIcon, BitbucketIcon, GitHubIcon, GitLabIcon } from "./Icons";
 import { ProjectFavicon } from "./ProjectFavicon";
 import { CodexMcpDialog } from "./CodexMcpDialog";
+import { CodexThreadBrowserDialog, nativeThreadTitle } from "./CodexThreadBrowserDialog";
 import { ReviewStartDialog } from "./ReviewStartDialog";
 import { ThreadRowLeadingStatus, ThreadRowTrailingStatus } from "./ThreadStatusIndicators";
 import { primaryServerKeybindingsAtom } from "../state/server";
@@ -508,6 +509,7 @@ function OpenCommandPaletteDialog(props: {
   const [isRemoteProjectCloning, setIsRemoteProjectCloning] = useState(false);
   const [reviewDialogOpen, setReviewDialogOpen] = useState(false);
   const [codexMcpDialogOpen, setCodexMcpDialogOpen] = useState(false);
+  const [codexThreadBrowserOpen, setCodexThreadBrowserOpen] = useState(false);
   const primaryEnvironmentId = primaryEnvironment?.environmentId ?? null;
 
   const addProjectEnvironmentOptions = useMemo(() => {
@@ -1083,6 +1085,19 @@ function OpenCommandPaletteDialog(props: {
       (provider) => provider.instanceId === activeThread.modelSelection.instanceId,
     );
     if (activeProvider?.driver === "codex") {
+      actionItems.push({
+        kind: "action",
+        value: "action:browse-codex-threads",
+        searchTerms: ["codex", "threads", "history", "search", "import", "link"],
+        title: "Browse native Codex threads...",
+        description: "Search app-server history and link a conversation to this project.",
+        icon: <MessageSquareIcon className={ITEM_ICON_CLASS} />,
+        keepOpen: true,
+        run: () => {
+          setCodexThreadBrowserOpen(true);
+          return Promise.resolve();
+        },
+      });
       actionItems.push({
         kind: "action",
         value: "action:fork-codex-thread",
@@ -2025,6 +2040,53 @@ function OpenCommandPaletteDialog(props: {
             instanceId={activeThread.modelSelection.instanceId}
             threadId={activeThread.id}
             onOpenChange={setCodexMcpDialogOpen}
+          />
+          <CodexThreadBrowserDialog
+            open={codexThreadBrowserOpen}
+            environmentId={activeThread.environmentId}
+            instanceId={activeThread.modelSelection.instanceId}
+            threadId={activeThread.id}
+            linkedProviderThreadIds={
+              new Set(
+                threads.flatMap((thread) =>
+                  thread.environmentId === activeThread.environmentId &&
+                  thread.providerResumeCursor !== undefined
+                    ? [thread.providerResumeCursor.threadId]
+                    : [],
+                ),
+              )
+            }
+            onOpenChange={setCodexThreadBrowserOpen}
+            onImport={async (nativeThread) => {
+              const importedThreadId = newThreadId();
+              const createResult = await createThread({
+                environmentId: activeThread.environmentId,
+                input: {
+                  threadId: importedThreadId,
+                  projectId: activeThread.projectId,
+                  title: nativeThreadTitle(nativeThread),
+                  modelSelection: activeThread.modelSelection,
+                  runtimeMode: activeThread.runtimeMode,
+                  interactionMode: activeThread.interactionMode,
+                  branch: activeThread.branch,
+                  worktreePath: activeThread.worktreePath,
+                  providerResumeCursor: {
+                    threadId: nativeThread.providerThreadId,
+                  },
+                  createdAt: new Date(nativeThread.createdAt * 1000).toISOString(),
+                },
+              });
+              if (createResult._tag === "Failure") {
+                throw squashAtomCommandFailure(createResult);
+              }
+              await navigate({
+                to: "/$environmentId/$threadId",
+                params: buildThreadRouteParams(
+                  scopeThreadRef(activeThread.environmentId, importedThreadId),
+                ),
+              });
+              setOpen(false);
+            }}
           />
         </>
       ) : null}

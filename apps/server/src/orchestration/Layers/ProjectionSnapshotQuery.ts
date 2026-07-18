@@ -1192,6 +1192,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 ...(row.providerResumeCursor !== undefined && row.providerResumeCursor !== null
                   ? { providerResumeCursor: row.providerResumeCursor }
                   : {}),
+                ...(row.providerResumeCursor !== undefined && row.providerResumeCursor !== null
+                  ? { providerResumeCursor: row.providerResumeCursor }
+                  : {}),
                 latestTurn: latestTurnByThread.get(row.threadId) ?? null,
                 createdAt: row.createdAt,
                 updatedAt: row.updatedAt,
@@ -1390,6 +1393,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   interactionMode: row.interactionMode,
                   branch: row.branch,
                   worktreePath: row.worktreePath,
+                  ...(row.providerResumeCursor !== undefined && row.providerResumeCursor !== null
+                    ? { providerResumeCursor: row.providerResumeCursor }
+                    : {}),
                   ...(row.providerResumeCursor !== undefined && row.providerResumeCursor !== null
                     ? { providerResumeCursor: row.providerResumeCursor }
                     : {}),

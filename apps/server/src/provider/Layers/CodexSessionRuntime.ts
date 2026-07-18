@@ -2102,6 +2102,29 @@ export const makeCodexSessionRuntime = (
                 preview: response.thread.preview,
               };
             }
+            case "threadList": {
+              const response = yield* client.request("thread/list", {
+                archived: operation.archived ?? false,
+                ...(operation.searchTerm?.trim()
+                  ? { searchTerm: operation.searchTerm.trim() }
+                  : {}),
+                sortKey: "updated_at",
+                sortDirection: "desc",
+                limit: 100,
+              });
+              return {
+                type: "threadList",
+                threads: response.data.map((listedThread) => ({
+                  providerThreadId: listedThread.id,
+                  ...(listedThread.name !== undefined ? { name: listedThread.name } : {}),
+                  preview: listedThread.preview,
+                  cwd: listedThread.cwd,
+                  createdAt: listedThread.createdAt,
+                  updatedAt: listedThread.updatedAt,
+                  archived: operation.archived ?? false,
+                })),
+              };
+            }
           }
         }),
       respondToRequest: (requestId, decision) =>
