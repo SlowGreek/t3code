@@ -1086,6 +1086,13 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
                     description: "Allow workspace writes only",
                   },
                 ],
+                isOther: true,
+              },
+              {
+                id: "api_key",
+                header: "API key",
+                question: "Enter the secret API key",
+                isSecret: true,
               },
             ],
           },
@@ -1113,6 +1120,10 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
           NodeAssert.equal(events[0].requestId, "req-user-input-1");
           NodeAssert.equal(events[0].payload.questions[0]?.id, "sandbox_mode");
           NodeAssert.equal(events[0].payload.questions[0]?.multiSelect, false);
+          NodeAssert.equal(events[0].payload.questions[0]?.allowOther, true);
+          NodeAssert.equal(events[0].payload.questions[1]?.id, "api_key");
+          NodeAssert.equal(events[0].payload.questions[1]?.isSecret, true);
+          NodeAssert.deepEqual(events[0].payload.questions[1]?.options, []);
         }
 
         NodeAssert.equal(events[1]?.type, "user-input.resolved");

@@ -889,6 +889,8 @@ export function mcpElicitationQuestions(
   readonly header: string;
   readonly question: string;
   readonly options: ReadonlyArray<{ readonly label: string; readonly description: string }>;
+  readonly allowOther: boolean;
+  readonly isSecret: boolean;
   readonly multiSelect: boolean;
 }> {
   if (payload.mode === "url") {
@@ -901,6 +903,8 @@ export function mcpElicitationQuestions(
           { label: "Open", description: payload.url },
           { label: "Decline", description: "Do not continue." },
         ],
+        allowOther: false,
+        isSecret: false,
         multiSelect: false,
       },
     ];
@@ -913,6 +917,8 @@ export function mcpElicitationQuestions(
         ? field.description
         : payload.message,
     options: mcpElicitationOptions(field),
+    allowOther: mcpElicitationOptions(field).length === 0,
+    isSecret: false,
     multiSelect: "type" in field && field.type === "array",
   }));
 }

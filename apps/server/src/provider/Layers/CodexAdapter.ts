@@ -364,7 +364,7 @@ function toUserInputQuestions(questions: ReadonlyArray<CodexToolUserInputQuestio
       const id = trimText(question.id);
       const header = trimText(question.header);
       const prompt = trimText(question.question);
-      if (!id || !header || !prompt || options.length === 0) {
+      if (!id || !header || !prompt) {
         return undefined;
       }
       return {
@@ -372,6 +372,8 @@ function toUserInputQuestions(questions: ReadonlyArray<CodexToolUserInputQuestio
         header,
         question: prompt,
         options,
+        allowOther: question.isOther ?? options.length === 0,
+        isSecret: question.isSecret ?? false,
         multiSelect: false,
       };
     })
