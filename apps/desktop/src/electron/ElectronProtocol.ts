@@ -11,6 +11,23 @@ import * as Electron from "electron";
 export const DESKTOP_HOST = "app";
 export const DESKTOP_PRODUCTION_SCHEME = "t3code";
 export const DESKTOP_DEVELOPMENT_SCHEME = "t3code-dev";
+export const DESKTOP_SCHEME_REGISTRATIONS: Electron.CustomScheme[] = [
+  DESKTOP_PRODUCTION_SCHEME,
+  DESKTOP_DEVELOPMENT_SCHEME,
+].map((scheme) => ({
+  scheme,
+  privileges: {
+    standard: true,
+    secure: true,
+    supportFetchAPI: true,
+    corsEnabled: true,
+    stream: true,
+  },
+}));
+
+export function registerDesktopSchemesAsPrivileged(): void {
+  Electron.protocol.registerSchemesAsPrivileged(DESKTOP_SCHEME_REGISTRATIONS);
+}
 
 export function getDesktopScheme(isDevelopment: boolean): string {
   return isDevelopment ? DESKTOP_DEVELOPMENT_SCHEME : DESKTOP_PRODUCTION_SCHEME;
@@ -68,8 +85,10 @@ export function makeDesktopContentSecurityPolicy(input: DesktopProtocolRegistrat
   const clerkOrigin = input.clerkFrontendApiHostname
     ? `https://${input.clerkFrontendApiHostname}`
     : undefined;
+  const desktopSchemeSource = `${input.scheme}:`;
   const scriptSources = [
     "'self'",
+    desktopSchemeSource,
     "'unsafe-inline'",
     ...(clerkOrigin ? [clerkOrigin] : []),
     "https://challenges.cloudflare.com",
@@ -86,9 +105,9 @@ export function makeDesktopContentSecurityPolicy(input: DesktopProtocolRegistrat
     `script-src ${scriptSources.join(" ")}`,
     `connect-src ${connectSources.join(" ")}`,
     `img-src 'self' ${input.scheme}: blob: data: http: https:`,
-    "style-src 'self' 'unsafe-inline'",
+    `style-src 'self' ${desktopSchemeSource} 'unsafe-inline'`,
     `font-src 'self' ${input.scheme}: data:`,
-    "worker-src 'self' blob:",
+    `worker-src 'self' ${desktopSchemeSource} blob:`,
     "frame-src 'self' https://challenges.cloudflare.com",
     "form-action 'self'",
   ].join("; ");
