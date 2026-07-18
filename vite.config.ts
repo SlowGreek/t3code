@@ -10,6 +10,7 @@ export default defineConfig({
   },
   test: {
     environment: "node",
+    pool: "forks",
     exclude: [
       "**/.repos/**",
       "**/node_modules/**",

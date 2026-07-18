@@ -38,7 +38,7 @@ import {
 } from "@t3tools/shared/dpop";
 import { RELAY_HEALTH_REQUEST_TYP, RELAY_MINT_REQUEST_TYP } from "@t3tools/shared/relayJwt";
 import * as RelayClient from "@t3tools/shared/relayClient";
-import { assert, it } from "@effect/vitest";
+import { assert, it as effectIt, type Vitest } from "@effect/vitest";
 import { assertFailure, assertInclude, assertTrue } from "@effect/vitest/utils";
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
@@ -47,10 +47,11 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PubSub from "effect/PubSub";
+import * as Semaphore from "effect/Semaphore";
+import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 
 import * as TestClock from "effect/testing/TestClock";
@@ -67,9 +68,10 @@ import {
 import { OtlpSerialization, OtlpTracer } from "effect/unstable/observability";
 import { RpcClient, RpcSerialization } from "effect/unstable/rpc";
 import * as Socket from "effect/unstable/socket/Socket";
-import { vi } from "vite-plus/test";
+import { describe, type TestContext, type TestOptions, vi } from "vite-plus/test";
 
 const TEST_EPOCH = DateTime.makeUnsafe("1970-01-01T00:00:00.000Z");
+const routerTestSemaphore = Effect.runSync(Semaphore.make(1));
 
 import * as ServerConfig from "./config.ts";
 import { makeRoutesLayer } from "./server.ts";
@@ -117,7 +119,9 @@ import * as Data from "effect/Data";
 
 const NodeHttpServer = {
   ...NodeHttpServerModule,
-  layerTest: Layer.fresh(NodeHttpServerModule.layerTest),
+  get layerTest() {
+    return Layer.fresh(NodeHttpServerModule.layerTest);
+  },
 };
 const defaultProjectId = ProjectId.make("project-default");
 const defaultThreadId = ThreadId.make("thread-default");
@@ -286,26 +290,23 @@ const makeBrowserOtlpPayload = (spanName: string) =>
       ({ close }) => Effect.promise(close),
     );
 
-    const runtime = ManagedRuntime.make(
-      OtlpTracer.layer({
-        url: collector.url,
-        exportInterval: "10 millis",
-        resource: {
-          serviceName: "t3-web",
-          attributes: {
-            "service.runtime": "t3-web",
-            "service.mode": "browser",
-            "service.version": "test",
+    yield* Effect.void.pipe(
+      Effect.withSpan(spanName),
+      Effect.provide(
+        OtlpTracer.layer({
+          url: collector.url,
+          exportInterval: "10 millis",
+          resource: {
+            serviceName: "t3-web",
+            attributes: {
+              "service.runtime": "t3-web",
+              "service.mode": "browser",
+              "service.version": "test",
+            },
           },
-        },
-      }).pipe(Layer.provide(browserOtlpTracingLayer)),
+        }).pipe(Layer.provide(browserOtlpTracingLayer)),
+      ),
     );
-
-    try {
-      yield* Effect.promise(() => runtime.runPromise(Effect.void.pipe(Effect.withSpan(spanName))));
-    } finally {
-      yield* Effect.promise(() => runtime.dispose());
-    }
 
     const request = yield* Effect.raceFirst(
       Effect.promise(() => collector.firstRequest).pipe(Effect.orDie),
@@ -811,7 +812,9 @@ const buildAppUnderTest = (options?: {
       Layer.provide(layerConfig),
     );
 
-    yield* Layer.build(appLayer);
+    const appMemoMap = yield* Layer.makeMemoMap;
+    const appScope = yield* Effect.scope;
+    yield* Layer.buildWithMemoMap(appLayer, appMemoMap, appScope);
     return config;
   });
 
@@ -1236,19 +1239,31 @@ const getWsServerUrl = (
     );
   });
 
-it.layer(NodeServices.layer)("server router seam", (baseIt) => {
-  const sequentialEffect = ((
+describe.sequential("server router seam", () => {
+  type NodeTestContext = Layer.Success<typeof NodeServices.layer> | Scope.Scope;
+  type NodeTestEffect = <A, E>(
     name: string,
-    self: Parameters<typeof baseIt.effect>[1],
-    options?: Parameters<typeof baseIt.effect>[2],
-  ) =>
-    baseIt.effect(
+    self: Vitest.TestFunction<A, E, NodeTestContext, [TestContext]>,
+    options?: number | TestOptions,
+  ) => void;
+  const sequentialEffect: NodeTestEffect = (name, self, options) =>
+    effectIt.effect(
       name,
-      self,
-      typeof options === "number"
-        ? { timeout: options, concurrent: false }
-        : { ...options, concurrent: false },
-    )) as typeof baseIt.effect;
+      (context) =>
+        routerTestSemaphore
+          .withPermit(
+            Effect.gen(function* () {
+              const memoMap = yield* Layer.makeMemoMap;
+              return self(context).pipe(
+                Effect.provide(NodeServices.layer),
+                Effect.scoped,
+                Effect.provideService(Layer.CurrentMemoMap, memoMap),
+              );
+            }).pipe(Effect.flatten),
+          )
+          .pipe(Effect.orDie),
+      options,
+    );
   const it = { effect: sequentialEffect };
   it.effect("serves static index content for GET / when staticDir is configured", () =>
     Effect.gen(function* () {
