@@ -70,7 +70,7 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
     }),
   );
 
-  it.effect("stores JSON for thread model options", () =>
+  it.effect("stores JSON for thread model options and provider resume cursors", () =>
     Effect.gen(function* () {
       const threads = yield* ProjectionThreadRepository;
       const sql = yield* SqlClient.SqlClient;
@@ -87,6 +87,7 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
         interactionMode: "default",
         branch: null,
         worktreePath: null,
+        providerResumeCursor: { threadId: "provider-thread-fork-1" },
         latestTurnId: null,
         createdAt: "2026-03-24T00:00:00.000Z",
         updatedAt: "2026-03-24T00:00:00.000Z",
@@ -100,8 +101,11 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
 
       const rows = yield* sql<{
         readonly modelSelection: string | null;
+        readonly providerResumeCursor: string | null;
       }>`
-        SELECT model_selection_json AS "modelSelection"
+        SELECT
+          model_selection_json AS "modelSelection",
+          provider_resume_cursor_json AS "providerResumeCursor"
         FROM projection_threads
         WHERE thread_id = 'thread-null-options'
       `;
@@ -118,6 +122,11 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
           model: "claude-opus-4-6",
         }),
       );
+      assert.strictEqual(
+        row.providerResumeCursor,
+        // @effect-diagnostics-next-line preferSchemaOverJson:off
+        JSON.stringify({ threadId: "provider-thread-fork-1" }),
+      );
 
       const persisted = yield* threads.getById({
         threadId: ThreadId.make("thread-null-options"),
@@ -125,6 +134,9 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
       assert.deepStrictEqual(Option.getOrNull(persisted)?.modelSelection, {
         instanceId: ProviderInstanceId.make("claudeAgent"),
         model: "claude-opus-4-6",
+      });
+      assert.deepStrictEqual(Option.getOrNull(persisted)?.providerResumeCursor, {
+        threadId: "provider-thread-fork-1",
       });
     }),
   );

@@ -1693,6 +1693,65 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
+  it("resumes a persisted native provider thread on its first turn", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+    const threadId = ThreadId.make("thread-native-fork");
+
+    // This harness owns a scoped runtime across imperative event assertions.
+    // oxlint-disable-next-line t3code/no-manual-effect-runtime-in-tests
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-create-native-fork"),
+        threadId,
+        projectId: ProjectId.make("project-1"),
+        title: "Native fork",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        branch: null,
+        worktreePath: null,
+        providerResumeCursor: { threadId: "provider-thread-fork-1" },
+        createdAt: now,
+      }),
+    );
+    await harness.drain();
+    const createdThread = (await harness.readModel()).threads.find(
+      (thread) => thread.id === threadId,
+    );
+    expect(createdThread?.providerResumeCursor).toEqual({
+      threadId: "provider-thread-fork-1",
+    });
+    // This harness owns a scoped runtime across imperative event assertions.
+    // oxlint-disable-next-line t3code/no-manual-effect-runtime-in-tests
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-start-native-fork"),
+        threadId,
+        message: {
+          messageId: asMessageId("message-native-fork"),
+          role: "user",
+          text: "Continue the fork",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.startSession.mock.calls.length === 1);
+    expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
+      threadId,
+      resumeCursor: { threadId: "provider-thread-fork-1" },
+    });
+  });
+
   it("rejects active runtime sessions that are missing provider instance ids", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
@@ -2058,6 +2117,8 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
 
+    // This harness owns a scoped runtime across imperative event assertions.
+    // oxlint-disable-next-line t3code/no-manual-effect-runtime-in-tests
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.session.set",
@@ -2077,6 +2138,8 @@ describe("ProviderCommandReactor", () => {
       }),
     );
 
+    // This harness owns a scoped runtime across imperative event assertions.
+    // oxlint-disable-next-line t3code/no-manual-effect-runtime-in-tests
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.session.stop",

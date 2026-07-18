@@ -254,6 +254,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           interactionMode: command.interactionMode,
           branch: command.branch,
           worktreePath: command.worktreePath,
+          ...(command.providerResumeCursor !== undefined
+            ? { providerResumeCursor: command.providerResumeCursor }
+            : {}),
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
         },

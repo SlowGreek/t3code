@@ -70,6 +70,7 @@ export const CodexMcpOperation = Schema.Union([
     server: Schema.String,
     enabled: Schema.Boolean,
   }),
+  Schema.Struct({ type: Schema.Literal("threadFork") }),
 ]);
 export type CodexMcpOperation = typeof CodexMcpOperation.Type;
 
@@ -102,6 +103,12 @@ export const CodexMcpResult = Schema.Union([
     type: Schema.Literal("setEnabled"),
     server: Schema.String,
     enabled: Schema.Boolean,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("threadFork"),
+    providerThreadId: Schema.String,
+    name: Schema.optional(NullableString),
+    preview: Schema.String,
   }),
 ]);
 export type CodexMcpResult = typeof CodexMcpResult.Type;

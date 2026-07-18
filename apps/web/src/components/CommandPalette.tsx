@@ -57,6 +57,7 @@ import { readLocalApi } from "../localApi";
 import { desktopLocalBackendId } from "../connection/desktopLocal";
 import { filesystemEnvironment } from "../state/filesystem";
 import { projectEnvironment } from "../state/projects";
+import { threadEnvironment } from "../state/threads";
 import { useEnvironmentQuery } from "../state/query";
 import { sourceControlEnvironment } from "../state/sourceControl";
 import { useAtomCommand } from "../state/use-atom-command";
@@ -84,7 +85,7 @@ import {
 } from "../lib/projectPaths";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { getLatestThreadForProject } from "../lib/threadSort";
-import { cn, isMacPlatform, isWindowsPlatform, newProjectId } from "../lib/utils";
+import { cn, isMacPlatform, isWindowsPlatform, newProjectId, newThreadId } from "../lib/utils";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
 import { buildThreadRouteParams, resolveThreadRouteTarget } from "../threadRoutes";
 import {
@@ -466,6 +467,12 @@ function OpenCommandPaletteDialog(props: {
   const [highlightedItemValue, setHighlightedItemValue] = useState<string | null>(null);
   const clientSettings = useClientSettings();
   const createProject = useAtomCommand(projectEnvironment.create, {
+    reportFailure: false,
+  });
+  const createThread = useAtomCommand(threadEnvironment.create, {
+    reportFailure: false,
+  });
+  const codexNativeRequest = useAtomQueryRunner(serverEnvironment.codexMcp, {
     reportFailure: false,
   });
   const lookupRepository = useAtomQueryRunner(sourceControlEnvironment.repository, {
@@ -1076,6 +1083,59 @@ function OpenCommandPaletteDialog(props: {
       (provider) => provider.instanceId === activeThread.modelSelection.instanceId,
     );
     if (activeProvider?.driver === "codex") {
+      actionItems.push({
+        kind: "action",
+        value: "action:fork-codex-thread",
+        searchTerms: ["fork", "codex", "thread", "conversation", "duplicate"],
+        title: "Fork current Codex thread",
+        description: "Create a T3 thread linked to a native app-server fork.",
+        icon: <SquarePenIcon className={ITEM_ICON_CLASS} />,
+        run: async () => {
+          const forkResult = await codexNativeRequest({
+            environmentId: activeThread.environmentId,
+            input: {
+              instanceId: activeThread.modelSelection.instanceId,
+              threadId: activeThread.id,
+              operation: { type: "threadFork" },
+            },
+          });
+          if (forkResult._tag === "Failure") {
+            throw squashAtomCommandFailure(forkResult);
+          }
+          if (forkResult.value.type !== "threadFork") {
+            throw new Error("Codex returned an unexpected thread fork response.");
+          }
+
+          const threadId = newThreadId();
+          const title =
+            forkResult.value.name?.trim() ||
+            (forkResult.value.preview.trim()
+              ? `Fork: ${forkResult.value.preview.trim().slice(0, 72)}`
+              : `Fork: ${activeThread.title}`);
+          const createResult = await createThread({
+            environmentId: activeThread.environmentId,
+            input: {
+              threadId,
+              projectId: activeThread.projectId,
+              title,
+              modelSelection: activeThread.modelSelection,
+              runtimeMode: activeThread.runtimeMode,
+              interactionMode: activeThread.interactionMode,
+              branch: activeThread.branch,
+              worktreePath: activeThread.worktreePath,
+              providerResumeCursor: { threadId: forkResult.value.providerThreadId },
+              createdAt: new Date().toISOString(),
+            },
+          });
+          if (createResult._tag === "Failure") {
+            throw squashAtomCommandFailure(createResult);
+          }
+          await navigate({
+            to: "/$environmentId/$threadId",
+            params: buildThreadRouteParams(scopeThreadRef(activeThread.environmentId, threadId)),
+          });
+        },
+      });
       actionItems.push({
         kind: "action",
         value: "action:codex-mcp",

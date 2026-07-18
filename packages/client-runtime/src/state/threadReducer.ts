@@ -68,6 +68,9 @@ export function applyThreadDetailEvent(
           interactionMode: event.payload.interactionMode,
           branch: event.payload.branch,
           worktreePath: event.payload.worktreePath,
+          ...(event.payload.providerResumeCursor !== undefined
+            ? { providerResumeCursor: event.payload.providerResumeCursor }
+            : {}),
           latestTurn: null,
           createdAt: event.payload.createdAt,
           updatedAt: event.payload.updatedAt,

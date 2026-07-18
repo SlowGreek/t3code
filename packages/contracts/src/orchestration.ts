@@ -357,6 +357,7 @@ export const OrchestrationThread = Schema.Struct({
   ),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  providerResumeCursor: Schema.optional(Schema.Struct({ threadId: TrimmedNonEmptyString })),
   latestTurn: Schema.NullOr(OrchestrationLatestTurn),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -529,6 +530,7 @@ const ThreadCreateCommand = Schema.Struct({
   ),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  providerResumeCursor: Schema.optional(Schema.Struct({ threadId: TrimmedNonEmptyString })),
   createdAt: IsoDateTime,
 });
 
@@ -914,6 +916,7 @@ export const ThreadCreatedPayload = Schema.Struct({
   ),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  providerResumeCursor: Schema.optional(Schema.Struct({ threadId: TrimmedNonEmptyString })),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });

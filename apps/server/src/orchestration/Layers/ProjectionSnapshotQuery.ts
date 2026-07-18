@@ -78,6 +78,9 @@ const ProjectionThreadProposedPlanDbRowSchema = ProjectionThreadProposedPlan;
 const ProjectionThreadDbRowSchema = ProjectionThread.mapFields(
   Struct.assign({
     modelSelection: Schema.fromJsonString(ModelSelection),
+    providerResumeCursor: Schema.fromJsonString(
+      Schema.NullOr(Schema.Struct({ threadId: Schema.String })),
+    ),
   }),
 );
 const ProjectionThreadActivityDbRowSchema = ProjectionThreadActivity.mapFields(
@@ -330,6 +333,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           interaction_mode AS "interactionMode",
           branch,
           worktree_path AS "worktreePath",
+          COALESCE(provider_resume_cursor_json, 'null') AS "providerResumeCursor",
           latest_turn_id AS "latestTurnId",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
@@ -358,6 +362,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           interaction_mode AS "interactionMode",
           branch,
           worktree_path AS "worktreePath",
+          COALESCE(provider_resume_cursor_json, 'null') AS "providerResumeCursor",
           latest_turn_id AS "latestTurnId",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
@@ -388,6 +393,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           interaction_mode AS "interactionMode",
           branch,
           worktree_path AS "worktreePath",
+          COALESCE(provider_resume_cursor_json, 'null') AS "providerResumeCursor",
           latest_turn_id AS "latestTurnId",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
@@ -750,6 +756,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           interaction_mode AS "interactionMode",
           branch,
           worktree_path AS "worktreePath",
+          COALESCE(provider_resume_cursor_json, 'null') AS "providerResumeCursor",
           latest_turn_id AS "latestTurnId",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
@@ -1182,6 +1189,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 interactionMode: row.interactionMode,
                 branch: row.branch,
                 worktreePath: row.worktreePath,
+                ...(row.providerResumeCursor !== undefined && row.providerResumeCursor !== null
+                  ? { providerResumeCursor: row.providerResumeCursor }
+                  : {}),
                 latestTurn: latestTurnByThread.get(row.threadId) ?? null,
                 createdAt: row.createdAt,
                 updatedAt: row.updatedAt,
@@ -1380,6 +1390,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   interactionMode: row.interactionMode,
                   branch: row.branch,
                   worktreePath: row.worktreePath,
+                  ...(row.providerResumeCursor !== undefined && row.providerResumeCursor !== null
+                    ? { providerResumeCursor: row.providerResumeCursor }
+                    : {}),
                   latestTurn: latestTurnByThread.get(row.threadId) ?? null,
                   createdAt: row.createdAt,
                   updatedAt: row.updatedAt,
@@ -1883,6 +1896,10 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         interactionMode: threadRow.value.interactionMode,
         branch: threadRow.value.branch,
         worktreePath: threadRow.value.worktreePath,
+        ...(threadRow.value.providerResumeCursor !== undefined &&
+        threadRow.value.providerResumeCursor !== null
+          ? { providerResumeCursor: threadRow.value.providerResumeCursor }
+          : {}),
         latestTurn: Option.isSome(latestTurnRow) ? mapLatestTurn(latestTurnRow.value) : null,
         createdAt: threadRow.value.createdAt,
         updatedAt: threadRow.value.updatedAt,
@@ -1977,6 +1994,10 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         interactionMode: threadRow.value.interactionMode,
         branch: threadRow.value.branch,
         worktreePath: threadRow.value.worktreePath,
+        ...(threadRow.value.providerResumeCursor !== undefined &&
+        threadRow.value.providerResumeCursor !== null
+          ? { providerResumeCursor: threadRow.value.providerResumeCursor }
+          : {}),
         latestTurn: Option.isSome(latestTurnRow) ? mapLatestTurn(latestTurnRow.value) : null,
         createdAt: threadRow.value.createdAt,
         updatedAt: threadRow.value.updatedAt,

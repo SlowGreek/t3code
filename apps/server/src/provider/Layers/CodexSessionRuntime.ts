@@ -2093,6 +2093,15 @@ export const makeCodexSessionRuntime = (
                 enabled: operation.enabled,
               };
             }
+            case "threadFork": {
+              const response = yield* client.request("thread/fork", { threadId });
+              return {
+                type: "threadFork",
+                providerThreadId: response.thread.id,
+                ...(response.thread.name !== undefined ? { name: response.thread.name } : {}),
+                preview: response.thread.preview,
+              };
+            }
           }
         }),
       respondToRequest: (requestId, decision) =>

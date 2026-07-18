@@ -32,6 +32,7 @@ export const ProjectionThread = Schema.Struct({
   interactionMode: ProviderInteractionMode,
   branch: Schema.NullOr(Schema.String),
   worktreePath: Schema.NullOr(Schema.String),
+  providerResumeCursor: Schema.optional(Schema.NullOr(Schema.Struct({ threadId: Schema.String }))),
   latestTurnId: Schema.NullOr(TurnId),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,

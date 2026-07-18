@@ -31,6 +31,8 @@ T3-only metadata (workspace presentation, local checkpoints, and GUI state) rema
 
 Native app-server archive, unarchive, delete, rename, compact, and review operations are used for active Codex threads. Review targets include uncommitted changes, a base branch, one commit, or custom instructions, with inline or detached delivery.
 
+Forking an active Codex thread calls native `thread/fork`, creates separate T3 GUI metadata, and persists the returned provider thread cursor. The first turn in the fork resumes that native thread even after projection rebuilds or server restarts.
+
 Typed app-server callbacks cover MCP elicitation, granular permission approval, dynamic client tools, current-time reads, and token refresh compatibility. Unknown requests receive a visible method-not-found response instead of hanging. Unknown notifications and newly introduced Codex events are retained through the typed `runtime.raw` extension channel and rendered in the thread activity log.
 
 Codex question metadata is preserved for optionless free text, Other answers, secrets, mixed question sets, and MCP multi-select fields. Secret answers use a password control and are never rendered as visible composer text.

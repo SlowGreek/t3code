@@ -581,7 +581,11 @@ const make = Effect.gen(function* () {
       return restartedSession.threadId;
     }
 
-    const startedSession = yield* startProviderSession(undefined);
+    const startedSession = yield* startProviderSession(
+      thread.providerResumeCursor !== undefined
+        ? { resumeCursor: thread.providerResumeCursor }
+        : undefined,
+    );
     yield* bindSessionToThread(startedSession);
     return startedSession.threadId;
   });
