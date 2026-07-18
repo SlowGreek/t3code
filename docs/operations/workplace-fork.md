@@ -29,6 +29,8 @@ T3-only metadata (workspace presentation, local checkpoints, and GUI state) rema
 
 When T3 creates a Git worktree it copies ignored `AGENTS.override.md` automatically. A repository may list additional untracked local files or directories in `.worktreeinclude`, one repository-relative path per line. Blank lines and `#` comments are ignored; absolute and parent-traversal paths are rejected.
 
+Managed cleanup callers can pass `snapshotPath` when removing a worktree. T3 copies the complete worktree before removal and rejects snapshot destinations inside the worktree. A subsequent create can pass `restoreSnapshotPath`; T3 restores the snapshot while preserving the new linked-worktree `.git` metadata.
+
 ## Security posture
 
 - Desktop and server listeners bind to `127.0.0.1`.

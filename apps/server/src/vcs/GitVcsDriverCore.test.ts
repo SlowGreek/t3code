@@ -664,6 +664,10 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
           yield* makeTmpDir("git-worktrees-"),
           "feature-worktree",
         );
+        const snapshotPath = pathService.join(
+          yield* makeTmpDir("git-worktree-snapshots-"),
+          "feature-worktree",
+        );
         const driver = yield* GitVcsDriver.GitVcsDriver;
         yield* writeTextFile(cwd, ".worktreeinclude", ".env.local\n");
         yield* writeTextFile(cwd, ".env.local", "LOCAL_ONLY=1\n");
@@ -688,9 +692,28 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
           yield* fileSystem.readFileString(pathService.join(worktreePath, "AGENTS.override.md")),
           "Local agent guidance\n",
         );
+        yield* writeTextFile(worktreePath, "draft.txt", "uncommitted draft\n");
 
-        yield* driver.removeWorktree({ cwd, path: worktreePath, force: true });
+        yield* driver.removeWorktree({
+          cwd,
+          path: worktreePath,
+          force: true,
+          snapshotPath,
+        });
         assert.equal(yield* fileSystem.exists(worktreePath), false);
+
+        yield* driver.createWorktree({
+          cwd,
+          path: worktreePath,
+          refName: "feature/worktree",
+          restoreSnapshotPath: snapshotPath,
+        });
+        assert.equal(
+          yield* fileSystem.readFileString(pathService.join(worktreePath, "draft.txt")),
+          "uncommitted draft\n",
+        );
+        assert.equal(yield* git(worktreePath, ["branch", "--show-current"]), "feature/worktree");
+        yield* driver.removeWorktree({ cwd, path: worktreePath, force: true });
       }),
     );
   });

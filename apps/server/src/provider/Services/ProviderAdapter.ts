@@ -42,6 +42,13 @@ export interface ProviderThreadSnapshot {
   readonly turns: ReadonlyArray<ProviderThreadTurnSnapshot>;
 }
 
+export type ProviderThreadLifecycleAction =
+  | { readonly type: "archive" }
+  | { readonly type: "unarchive" }
+  | { readonly type: "delete" }
+  | { readonly type: "name"; readonly name: string }
+  | { readonly type: "compact" };
+
 export interface ProviderAdapterShape<TError> {
   /**
    * Provider kind implemented by this adapter.
@@ -113,6 +120,12 @@ export interface ProviderAdapterShape<TError> {
     threadId: ThreadId,
     numTurns: number,
   ) => Effect.Effect<ProviderThreadSnapshot, TError>;
+
+  /** Optional native lifecycle synchronization for authoritative provider threads. */
+  readonly syncThreadLifecycle?: (
+    threadId: ThreadId,
+    action: ProviderThreadLifecycleAction,
+  ) => Effect.Effect<void, TError>;
 
   /**
    * Stop all sessions owned by this adapter.

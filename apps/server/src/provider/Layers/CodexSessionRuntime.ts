@@ -167,6 +167,14 @@ export interface CodexSessionRuntimeShape {
   readonly rollbackThread: (
     numTurns: number,
   ) => Effect.Effect<CodexThreadSnapshot, CodexSessionRuntimeError>;
+  readonly syncThreadLifecycle: (
+    action:
+      | { readonly type: "archive" }
+      | { readonly type: "unarchive" }
+      | { readonly type: "delete" }
+      | { readonly type: "name"; readonly name: string }
+      | { readonly type: "compact" },
+  ) => Effect.Effect<void, CodexSessionRuntimeError>;
   readonly respondToRequest: (
     requestId: ApprovalRequestId,
     decision: ProviderApprovalDecision,
@@ -1849,6 +1857,30 @@ export const makeCodexSessionRuntime = (
             activeTurnId: undefined,
           });
           return parseThreadSnapshot(response);
+        }),
+      syncThreadLifecycle: (action) =>
+        Effect.gen(function* () {
+          const providerThreadId = yield* readProviderThreadId;
+          switch (action.type) {
+            case "archive":
+              yield* client.request("thread/archive", { threadId: providerThreadId });
+              return;
+            case "unarchive":
+              yield* client.request("thread/unarchive", { threadId: providerThreadId });
+              return;
+            case "delete":
+              yield* client.request("thread/delete", { threadId: providerThreadId });
+              return;
+            case "name":
+              yield* client.request("thread/name/set", {
+                threadId: providerThreadId,
+                name: action.name,
+              });
+              return;
+            case "compact":
+              yield* client.request("thread/compact/start", { threadId: providerThreadId });
+              return;
+          }
         }),
       respondToRequest: (requestId, decision) =>
         Effect.gen(function* () {

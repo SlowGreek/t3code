@@ -29,7 +29,10 @@ import type * as Effect from "effect/Effect";
 import type * as Stream from "effect/Stream";
 
 import type { ProviderServiceError } from "../Errors.ts";
-import type { ProviderAdapterCapabilities } from "./ProviderAdapter.ts";
+import type {
+  ProviderAdapterCapabilities,
+  ProviderThreadLifecycleAction,
+} from "./ProviderAdapter.ts";
 import type { ProviderInstanceRoutingInfo } from "./ProviderAdapterRegistry.ts";
 
 /**
@@ -103,6 +106,11 @@ export interface ProviderServiceShape {
   readonly rollbackConversation: (input: {
     readonly threadId: ThreadId;
     readonly numTurns: number;
+  }) => Effect.Effect<void, ProviderServiceError>;
+
+  readonly syncThreadLifecycle: (input: {
+    readonly threadId: ThreadId;
+    readonly action: ProviderThreadLifecycleAction;
   }) => Effect.Effect<void, ProviderServiceError>;
 
   /**

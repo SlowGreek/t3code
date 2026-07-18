@@ -104,6 +104,11 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
       }),
   );
 
+  public readonly syncThreadLifecycleImpl = vi.fn(
+    (_action: Parameters<CodexSessionRuntimeShape["syncThreadLifecycle"]>[0]): Promise<void> =>
+      Promise.resolve(),
+  );
+
   public readonly respondToRequestImpl = vi.fn(
     (_requestId: ApprovalRequestId, _decision: ProviderApprovalDecision): Promise<void> =>
       Promise.resolve(undefined),
@@ -140,6 +145,10 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
 
   rollbackThread(numTurns: number) {
     return Effect.promise(() => this.rollbackThreadImpl(numTurns));
+  }
+
+  syncThreadLifecycle(action: Parameters<CodexSessionRuntimeShape["syncThreadLifecycle"]>[0]) {
+    return Effect.promise(() => this.syncThreadLifecycleImpl(action));
   }
 
   respondToRequest(requestId: ApprovalRequestId, decision: ProviderApprovalDecision) {
@@ -492,6 +501,23 @@ function startLifecycleRuntime() {
 }
 
 lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
+  it.effect("routes native thread lifecycle actions to the active Codex runtime", () =>
+    Effect.gen(function* () {
+      const { adapter, runtime } = yield* startLifecycleRuntime();
+      runtime.syncThreadLifecycleImpl.mockClear();
+      NodeAssert.ok(adapter.syncThreadLifecycle);
+
+      yield* adapter.syncThreadLifecycle(asThreadId("thread-1"), {
+        type: "name",
+        name: "Renamed thread",
+      });
+
+      NodeAssert.deepStrictEqual(runtime.syncThreadLifecycleImpl.mock.calls, [
+        [{ type: "name", name: "Renamed thread" }],
+      ]);
+    }),
+  );
+
   it.effect("maps completed agent message items to canonical item.completed events", () =>
     Effect.gen(function* () {
       const { adapter, runtime } = yield* startLifecycleRuntime();
