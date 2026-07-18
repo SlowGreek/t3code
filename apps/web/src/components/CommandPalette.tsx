@@ -29,6 +29,7 @@ import {
   FolderPlusIcon,
   LinkIcon,
   MessageSquareIcon,
+  Minimize2Icon,
   SettingsIcon,
   SquarePenIcon,
 } from "lucide-react";
@@ -49,6 +50,7 @@ import { OpenAddProjectCommandPaletteProvider } from "../commandPaletteContext";
 import { isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
 import { useDesktopLocalBootstraps } from "../connection/useDesktopLocalBootstraps";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
+import { useThreadActions } from "../hooks/useThreadActions";
 import { useClientSettings } from "../hooks/useSettings";
 import { readLocalApi } from "../localApi";
 import { desktopLocalBackendId } from "../connection/desktopLocal";
@@ -473,6 +475,7 @@ function OpenCommandPaletteDialog(props: {
   const primaryEnvironment = usePrimaryEnvironment();
   const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread } =
     useHandleNewThread();
+  const { compactThread } = useThreadActions();
   const projects = useProjects();
   const threads = useThreadShells();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
@@ -1041,6 +1044,20 @@ function OpenCommandPaletteDialog(props: {
       keepOpen: true,
       run: async () => {
         startAddProjectBrowse(wslAddProjectEnvironmentOption.environmentId);
+      },
+    });
+  }
+
+  if (activeThread && activeThread.session?.status !== "running") {
+    actionItems.push({
+      kind: "action",
+      value: "action:compact-thread",
+      searchTerms: ["compact thread", "context", "summarize", "codex"],
+      title: "Compact current thread",
+      description: "Ask Codex to compact this thread's context.",
+      icon: <Minimize2Icon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        await compactThread(scopeThreadRef(activeThread.environmentId, activeThread.id));
       },
     });
   }

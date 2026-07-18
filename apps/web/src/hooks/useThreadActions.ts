@@ -51,6 +51,9 @@ export function useThreadActions() {
     reportFailure: false,
   });
   const stopThreadSession = useAtomCommand(threadEnvironment.stopSession);
+  const compactThreadMutation = useAtomCommand(threadEnvironment.compact, {
+    reportFailure: false,
+  });
   const removeWorktree = useAtomCommand(vcsEnvironment.removeWorktree, {
     reportFailure: false,
   });
@@ -354,6 +357,15 @@ export function useThreadActions() {
     ],
   );
 
+  const compactThread = useCallback(
+    (target: ScopedThreadRef) =>
+      compactThreadMutation({
+        environmentId: target.environmentId,
+        input: { threadId: target.threadId },
+      }),
+    [compactThreadMutation],
+  );
+
   const confirmAndDeleteThread = useCallback(
     async (target: ScopedThreadRef) => {
       const localApi = readLocalApi();
@@ -369,6 +381,7 @@ export function useThreadActions() {
             ].join("\n"),
           ),
         );
+
         if (confirmationResult._tag === "Failure") {
           return confirmationResult;
         }
@@ -388,7 +401,8 @@ export function useThreadActions() {
       unarchiveThread,
       deleteThread,
       confirmAndDeleteThread,
+      compactThread,
     }),
-    [archiveThread, confirmAndDeleteThread, deleteThread, unarchiveThread],
+    [archiveThread, compactThread, confirmAndDeleteThread, deleteThread, unarchiveThread],
   );
 }

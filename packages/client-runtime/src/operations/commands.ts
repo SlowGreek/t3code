@@ -44,6 +44,7 @@ export type RespondToThreadApprovalInput = CommandInput<"thread.approval.respond
 export type RespondToThreadUserInputInput = CommandInput<"thread.user-input.respond">;
 export type RevertThreadCheckpointInput = CommandInput<"thread.checkpoint.revert">;
 export type StopThreadSessionInput = CommandInput<"thread.session.stop">;
+export type CompactThreadInput = CommandInput<"thread.compact">;
 
 type DispatchTag = typeof ORCHESTRATION_WS_METHODS.dispatchCommand;
 type CommandEffect = Effect.Effect<
@@ -247,9 +248,22 @@ export const stopThreadSession: (input: StopThreadSessionInput) => CommandEffect
   "EnvironmentCommands.stopThreadSession",
 )(function* (input) {
   const metadata = yield* timestampedCommandMetadata(input);
+
   return yield* dispatch({
     ...input,
     type: "thread.session.stop",
+    commandId: metadata.commandId,
+    createdAt: metadata.createdAt,
+  });
+});
+
+export const compactThread: (input: CompactThreadInput) => CommandEffect = Effect.fn(
+  "EnvironmentCommands.compactThread",
+)(function* (input) {
+  const metadata = yield* timestampedCommandMetadata(input);
+  return yield* dispatch({
+    ...input,
+    type: "thread.compact",
     commandId: metadata.commandId,
     createdAt: metadata.createdAt,
   });
