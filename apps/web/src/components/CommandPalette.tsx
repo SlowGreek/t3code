@@ -27,6 +27,7 @@ import {
   CornerLeftUpIcon,
   FolderIcon,
   FolderPlusIcon,
+  FileSearchIcon,
   LinkIcon,
   MessageSquareIcon,
   Minimize2Icon,
@@ -475,7 +476,7 @@ function OpenCommandPaletteDialog(props: {
   const primaryEnvironment = usePrimaryEnvironment();
   const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread } =
     useHandleNewThread();
-  const { compactThread } = useThreadActions();
+  const { compactThread, startReview } = useThreadActions();
   const projects = useProjects();
   const threads = useThreadShells();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
@@ -1058,6 +1059,34 @@ function OpenCommandPaletteDialog(props: {
       icon: <Minimize2Icon className={ITEM_ICON_CLASS} />,
       run: async () => {
         await compactThread(scopeThreadRef(activeThread.environmentId, activeThread.id));
+      },
+    });
+    actionItems.push({
+      kind: "action",
+      value: "action:review-uncommitted",
+      searchTerms: ["review", "uncommitted", "changes", "codex", "inline"],
+      title: "Review uncommitted changes",
+      description: "Start a native Codex review in the current thread.",
+      icon: <FileSearchIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        await startReview(scopeThreadRef(activeThread.environmentId, activeThread.id), {
+          target: { type: "uncommittedChanges" },
+          delivery: "inline",
+        });
+      },
+    });
+    actionItems.push({
+      kind: "action",
+      value: "action:review-uncommitted-detached",
+      searchTerms: ["review", "uncommitted", "changes", "codex", "detached"],
+      title: "Review uncommitted changes in a new thread",
+      description: "Start a detached native Codex review.",
+      icon: <FileSearchIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        await startReview(scopeThreadRef(activeThread.environmentId, activeThread.id), {
+          target: { type: "uncommittedChanges" },
+          delivery: "detached",
+        });
       },
     });
   }

@@ -15,6 +15,7 @@ import {
   type SetThreadRuntimeModeInput,
   type StartThreadTurnInput,
   type StopThreadSessionInput,
+  type StartThreadReviewInput,
   type UnarchiveThreadInput,
   type UpdateThreadMetadataInput,
   archiveThread,
@@ -29,6 +30,7 @@ import {
   setThreadRuntimeMode,
   startThreadTurn,
   stopThreadSession,
+  startThreadReview,
   unarchiveThread,
   updateThreadMetadata,
 } from "../operations/commands.ts";
@@ -47,6 +49,7 @@ export type {
   SetThreadRuntimeModeInput,
   StartThreadTurnInput,
   StopThreadSessionInput,
+  StartThreadReviewInput,
   UnarchiveThreadInput,
   UpdateThreadMetadataInput,
 } from "../operations/commands.ts";
@@ -142,6 +145,12 @@ export function createThreadEnvironmentAtoms<R, E>(
     compact: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:compact",
       execute: (input: CompactThreadInput) => compactThread(input),
+      scheduler,
+      concurrency,
+    }),
+    startReview: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:start-review",
+      execute: (input: StartThreadReviewInput) => startThreadReview(input),
       scheduler,
       concurrency,
     }),

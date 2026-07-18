@@ -173,7 +173,12 @@ export interface CodexSessionRuntimeShape {
       | { readonly type: "unarchive" }
       | { readonly type: "delete" }
       | { readonly type: "name"; readonly name: string }
-      | { readonly type: "compact" },
+      | { readonly type: "compact" }
+      | {
+          readonly type: "review";
+          readonly delivery: "inline" | "detached";
+          readonly target: EffectCodexSchema.V2ReviewStartParams__ReviewTarget;
+        },
   ) => Effect.Effect<void, CodexSessionRuntimeError>;
   readonly respondToRequest: (
     requestId: ApprovalRequestId,
@@ -1879,6 +1884,13 @@ export const makeCodexSessionRuntime = (
               return;
             case "compact":
               yield* client.request("thread/compact/start", { threadId: providerThreadId });
+              return;
+            case "review":
+              yield* client.request("review/start", {
+                threadId: providerThreadId,
+                delivery: action.delivery,
+                target: action.target,
+              });
               return;
           }
         }),

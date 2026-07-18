@@ -54,6 +54,9 @@ export function useThreadActions() {
   const compactThreadMutation = useAtomCommand(threadEnvironment.compact, {
     reportFailure: false,
   });
+  const startReviewMutation = useAtomCommand(threadEnvironment.startReview, {
+    reportFailure: false,
+  });
   const removeWorktree = useAtomCommand(vcsEnvironment.removeWorktree, {
     reportFailure: false,
   });
@@ -366,6 +369,29 @@ export function useThreadActions() {
     [compactThreadMutation],
   );
 
+  const startReview = useCallback(
+    (
+      target: ScopedThreadRef,
+      review: {
+        readonly target:
+          | { readonly type: "uncommittedChanges" }
+          | { readonly type: "baseBranch"; readonly branch: string }
+          | { readonly type: "commit"; readonly sha: string; readonly title?: string | null }
+          | { readonly type: "custom"; readonly instructions: string };
+        readonly delivery: "inline" | "detached";
+      },
+    ) =>
+      startReviewMutation({
+        environmentId: target.environmentId,
+        input: {
+          threadId: target.threadId,
+          target: review.target,
+          delivery: review.delivery,
+        },
+      }),
+    [startReviewMutation],
+  );
+
   const confirmAndDeleteThread = useCallback(
     async (target: ScopedThreadRef) => {
       const localApi = readLocalApi();
@@ -402,7 +428,15 @@ export function useThreadActions() {
       deleteThread,
       confirmAndDeleteThread,
       compactThread,
+      startReview,
     }),
-    [archiveThread, compactThread, confirmAndDeleteThread, deleteThread, unarchiveThread],
+    [
+      archiveThread,
+      compactThread,
+      confirmAndDeleteThread,
+      deleteThread,
+      startReview,
+      unarchiveThread,
+    ],
   );
 }

@@ -47,7 +47,16 @@ export type ProviderThreadLifecycleAction =
   | { readonly type: "unarchive" }
   | { readonly type: "delete" }
   | { readonly type: "name"; readonly name: string }
-  | { readonly type: "compact" };
+  | { readonly type: "compact" }
+  | {
+      readonly type: "review";
+      readonly delivery: "inline" | "detached";
+      readonly target:
+        | { readonly type: "uncommittedChanges" }
+        | { readonly type: "baseBranch"; readonly branch: string }
+        | { readonly type: "commit"; readonly sha: string; readonly title?: string | null }
+        | { readonly type: "custom"; readonly instructions: string };
+    };
 
 export interface ProviderAdapterShape<TError> {
   /**

@@ -691,6 +691,33 @@ const ThreadCompactCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+export const ThreadReviewTarget = Schema.Union([
+  Schema.Struct({ type: Schema.Literal("uncommittedChanges") }),
+  Schema.Struct({
+    type: Schema.Literal("baseBranch"),
+    branch: TrimmedNonEmptyString,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("commit"),
+    sha: TrimmedNonEmptyString,
+    title: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  }),
+  Schema.Struct({
+    type: Schema.Literal("custom"),
+    instructions: TrimmedNonEmptyString,
+  }),
+]);
+export type ThreadReviewTarget = typeof ThreadReviewTarget.Type;
+
+const ThreadReviewStartCommand = Schema.Struct({
+  type: Schema.Literal("thread.review.start"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  target: ThreadReviewTarget,
+  delivery: Schema.Literals(["inline", "detached"]),
+  createdAt: IsoDateTime,
+});
+
 const DispatchableClientOrchestrationCommand = Schema.Union([
   ProjectCreateCommand,
   ProjectMetaUpdateCommand,
@@ -709,6 +736,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadCheckpointRevertCommand,
   ThreadSessionStopCommand,
   ThreadCompactCommand,
+  ThreadReviewStartCommand,
 ]);
 export type DispatchableClientOrchestrationCommand =
   typeof DispatchableClientOrchestrationCommand.Type;
@@ -731,6 +759,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadCheckpointRevertCommand,
   ThreadSessionStopCommand,
   ThreadCompactCommand,
+  ThreadReviewStartCommand,
 ]);
 export type ClientOrchestrationCommand = typeof ClientOrchestrationCommand.Type;
 
@@ -836,6 +865,7 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.reverted",
   "thread.session-stop-requested",
   "thread.compact-requested",
+  "thread.review-start-requested",
   "thread.session-set",
   "thread.proposed-plan-upserted",
   "thread.turn-diff-completed",
@@ -993,6 +1023,13 @@ export const ThreadCompactRequestedPayload = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+export const ThreadReviewStartRequestedPayload = Schema.Struct({
+  threadId: ThreadId,
+  target: ThreadReviewTarget,
+  delivery: Schema.Literals(["inline", "detached"]),
+  createdAt: IsoDateTime,
+});
+
 export const ThreadSessionSetPayload = Schema.Struct({
   threadId: ThreadId,
   session: OrchestrationSession,
@@ -1135,6 +1172,11 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.compact-requested"),
     payload: ThreadCompactRequestedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.review-start-requested"),
+    payload: ThreadReviewStartRequestedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

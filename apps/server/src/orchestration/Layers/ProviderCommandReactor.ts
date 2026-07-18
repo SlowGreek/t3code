@@ -55,7 +55,8 @@ type ProviderIntentEvent = Extract<
       | "thread.approval-response-requested"
       | "thread.user-input-response-requested"
       | "thread.session-stop-requested"
-      | "thread.compact-requested";
+      | "thread.compact-requested"
+      | "thread.review-start-requested";
   }
 >;
 
@@ -1050,6 +1051,25 @@ const make = Effect.gen(function* () {
           action: { type: "compact" },
         });
         return;
+      case "thread.review-start-requested":
+        yield* providerService.syncThreadLifecycle({
+          threadId: event.payload.threadId,
+          action: {
+            type: "review",
+            delivery: event.payload.delivery,
+            target:
+              event.payload.target.type === "commit"
+                ? {
+                    type: "commit",
+                    sha: event.payload.target.sha,
+                    ...(event.payload.target.title !== undefined
+                      ? { title: event.payload.target.title }
+                      : {}),
+                  }
+                : event.payload.target,
+          },
+        });
+        return;
       case "thread.session-stop-requested":
         yield* processSessionStopRequested(event);
         return;
@@ -1080,6 +1100,7 @@ const make = Effect.gen(function* () {
         event.type === "thread.approval-response-requested" ||
         event.type === "thread.user-input-response-requested" ||
         event.type === "thread.compact-requested" ||
+        event.type === "thread.review-start-requested" ||
         event.type === "thread.session-stop-requested"
       ) {
         return yield* worker.enqueue(event);
