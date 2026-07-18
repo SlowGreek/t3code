@@ -691,6 +691,23 @@ describe("workEntryIndicatesToolFailure", () => {
 });
 
 describe("deriveWorkLogEntries", () => {
+  it("keeps unknown Codex events visible in the work log", () => {
+    const entries = deriveWorkLogEntries([
+      makeActivity({
+        id: "raw-codex-event",
+        kind: "runtime.raw",
+        summary: "Codex event: future/codex/event",
+        payload: {
+          method: "future/codex/event",
+          kind: "notification",
+          payload: { feature: "new" },
+        },
+      }),
+    ]);
+
+    expect(entries[0]?.label).toBe("Codex event: future/codex/event");
+  });
+
   it("omits tool started entries and keeps completed entries", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({

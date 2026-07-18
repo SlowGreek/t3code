@@ -507,7 +507,17 @@ function mapToRuntimeEvents(
 ): ReadonlyArray<ProviderRuntimeEvent> {
   if (event.kind === "error") {
     if (!event.message) {
-      return [];
+      return [
+        {
+          ...runtimeEventBase(event, canonicalThreadId),
+          type: "runtime.raw",
+          payload: {
+            method: event.method,
+            kind: event.kind,
+            payload: event.payload ?? {},
+          },
+        },
+      ];
     }
     return [
       {
@@ -1348,7 +1358,17 @@ function mapToRuntimeEvents(
     ];
   }
 
-  return [];
+  return [
+    {
+      ...runtimeEventBase(event, canonicalThreadId),
+      type: "runtime.raw",
+      payload: {
+        method: event.method,
+        kind: event.kind,
+        payload: event.payload ?? {},
+      },
+    },
+  ];
 }
 
 /**

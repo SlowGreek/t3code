@@ -502,6 +502,37 @@ function startLifecycleRuntime() {
 }
 
 lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
+  it.effect("passes unknown Codex notifications through the raw extension channel", () =>
+    Effect.gen(function* () {
+      const { adapter, runtime } = yield* startLifecycleRuntime();
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+      yield* runtime.emit({
+        id: asEventId("evt-future"),
+        kind: "notification",
+        provider: ProviderDriverKind.make("codex"),
+        threadId: asThreadId("thread-1"),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        method: "future/codex/event",
+        payload: { feature: "new" },
+      });
+
+      const firstEvent = yield* Fiber.join(firstEventFiber);
+      NodeAssert.equal(firstEvent._tag, "Some");
+      if (firstEvent._tag !== "Some") return;
+      NodeAssert.equal(firstEvent.value.type, "runtime.raw");
+      NodeAssert.deepStrictEqual(firstEvent.value.payload, {
+        method: "future/codex/event",
+        kind: "notification",
+        payload: { feature: "new" },
+      });
+      NodeAssert.deepStrictEqual(firstEvent.value.raw, {
+        source: "codex.app-server.notification",
+        method: "future/codex/event",
+        payload: { feature: "new" },
+      });
+    }),
+  );
+
   it.effect("routes native thread lifecycle actions to the active Codex runtime", () =>
     Effect.gen(function* () {
       const { adapter, runtime } = yield* startLifecycleRuntime();

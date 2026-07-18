@@ -700,6 +700,15 @@ function readNotificationThreadId(notification: CodexServerNotification): string
   }
 }
 
+function readUnknownThreadId(params: unknown): string | undefined {
+  if (typeof params !== "object" || params === null) return undefined;
+  if ("threadId" in params && typeof params.threadId === "string") return params.threadId;
+  if ("conversationId" in params && typeof params.conversationId === "string") {
+    return params.conversationId;
+  }
+  return undefined;
+}
+
 function readRouteFields(notification: CodexServerNotification): {
   readonly turnId: TurnId | undefined;
   readonly itemId: ProviderItemId | undefined;
@@ -1640,6 +1649,47 @@ export const makeCodexSessionRuntime = (
               payload: response,
             });
             return response;
+          }),
+      )
+      .pipe(Effect.flatMap((unregister) => Effect.addFinalizer(() => unregister)));
+
+    yield* client
+      .registerUnknownServerRequest(
+        (_method, params) => {
+          const requestThreadId = readUnknownThreadId(params);
+          return requestThreadId === undefined || requestThreadId === routedProviderThreadId;
+        },
+        (method, params) =>
+          Effect.gen(function* () {
+            const requestId = ApprovalRequestId.make(yield* randomUUIDv4("user-input-request"));
+            yield* emitEvent({
+              kind: "request",
+              threadId: options.threadId,
+              method,
+              requestId,
+              message: `Unsupported Codex callback: ${method}`,
+              ...(params !== undefined ? { payload: params } : {}),
+            });
+            return yield* CodexErrors.CodexAppServerRequestError.methodNotFound(method);
+          }),
+      )
+      .pipe(Effect.flatMap((unregister) => Effect.addFinalizer(() => unregister)));
+
+    yield* client
+      .registerUnknownServerNotification(
+        (_method, params) => {
+          const notificationThreadId = readUnknownThreadId(params);
+          return (
+            notificationThreadId === undefined || notificationThreadId === routedProviderThreadId
+          );
+        },
+        (method, params) =>
+          emitEvent({
+            kind: "notification",
+            threadId: options.threadId,
+            method,
+            message: `Unrecognized Codex event: ${method}`,
+            ...(params !== undefined ? { payload: params } : {}),
           }),
       )
       .pipe(Effect.flatMap((unregister) => Effect.addFinalizer(() => unregister)));
