@@ -9,6 +9,7 @@ import {
   ProviderSession,
   ProviderDriverKind,
   ProviderInstanceId,
+  type ServerProviderSkill,
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
 import {
@@ -48,6 +49,7 @@ import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
 import {
+  buildProviderStructuredInputs,
   providerErrorLabel,
   providerErrorLabelFromInstanceHint,
   ProviderCommandReactorLive,
@@ -127,6 +129,55 @@ describe("ProviderCommandReactor", () => {
       ).toBe("codex_personal");
     });
 
+    describe("structured Codex inputs", () => {
+      it("resolves enabled skills and composer file links without duplicating inputs", () => {
+        expect(
+          buildProviderStructuredInputs({
+            text: "$frontend-design inspect [App.tsx](apps/web/src/App.tsx) and $frontend-design",
+            skills: [
+              {
+                name: "frontend-design",
+                path: "/skills/frontend-design/SKILL.md",
+                enabled: true,
+              },
+            ],
+          }),
+        ).toEqual([
+          {
+            type: "skill",
+            name: "frontend-design",
+            path: "/skills/frontend-design/SKILL.md",
+          },
+          {
+            type: "mention",
+            name: "App.tsx",
+            path: "apps/web/src/App.tsx",
+          },
+        ]);
+      });
+
+      it("ignores disabled or unknown skills and external markdown links", () => {
+        expect(
+          buildProviderStructuredInputs({
+            text: "$disabled $unknown [Docs](https://example.com/docs) [Local](src/local.ts)",
+            skills: [
+              {
+                name: "disabled",
+                path: "/skills/disabled/SKILL.md",
+                enabled: false,
+              },
+            ],
+          }),
+        ).toEqual([
+          {
+            type: "mention",
+            name: "Local",
+            path: "src/local.ts",
+          },
+        ]);
+      });
+    });
+
     it("uses the desired provider instance slug when desired instance lookup fails", () => {
       expect(
         providerErrorLabelFromInstanceHint({
@@ -145,6 +196,7 @@ describe("ProviderCommandReactor", () => {
     readonly threadModelSelection?: ModelSelection;
     readonly sessionModelSwitch?: "unsupported" | "in-session";
     readonly requiresNewThreadForModelChange?: boolean;
+    readonly providerSkills?: ReadonlyArray<ServerProviderSkill>;
   }) {
     const now = "2026-01-01T00:00:00.000Z";
     const baseDir =
@@ -290,6 +342,7 @@ describe("ProviderCommandReactor", () => {
         ...(input?.requiresNewThreadForModelChange === true
           ? { requiresNewThreadForModelChange: true }
           : {}),
+        skills: input?.providerSkills ?? [],
       },
     ];
 
@@ -301,6 +354,7 @@ describe("ProviderCommandReactor", () => {
       respondToRequest: respondToRequest as ProviderServiceShape["respondToRequest"],
       respondToUserInput: respondToUserInput as ProviderServiceShape["respondToUserInput"],
       stopSession: stopSession as ProviderServiceShape["stopSession"],
+      syncThreadLifecycle: () => Effect.void,
       listSessions: () => Effect.succeed(runtimeSessions),
       getCapabilities: (_provider) =>
         Effect.succeed({
@@ -428,7 +482,15 @@ describe("ProviderCommandReactor", () => {
   }
 
   it("reacts to thread.turn.start by ensuring session and sending provider turn", async () => {
-    const harness = await createHarness();
+    const harness = await createHarness({
+      providerSkills: [
+        {
+          name: "frontend-design",
+          path: "/skills/frontend-design/SKILL.md",
+          enabled: true,
+        },
+      ],
+    });
     const now = "2026-01-01T00:00:00.000Z";
 
     await Effect.runPromise(
@@ -439,8 +501,20 @@ describe("ProviderCommandReactor", () => {
         message: {
           messageId: asMessageId("user-message-1"),
           role: "user",
-          text: "hello reactor",
+          text: "$frontend-design inspect [App.tsx](apps/web/src/App.tsx)",
           attachments: [],
+          structuredInputs: [
+            {
+              type: "mention",
+              name: "App.tsx",
+              path: "apps/web/src/App.tsx",
+            },
+            {
+              type: "skill",
+              name: "frontend-design",
+              path: "/skills/frontend-design/SKILL.md",
+            },
+          ],
         },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
@@ -458,6 +532,22 @@ describe("ProviderCommandReactor", () => {
         model: "gpt-5-codex",
       },
       runtimeMode: "approval-required",
+    });
+    expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+      clientUserMessageId: "user-message-1",
+      input: "$frontend-design inspect [App.tsx](apps/web/src/App.tsx)",
+      structuredInputs: [
+        {
+          type: "mention",
+          name: "App.tsx",
+          path: "apps/web/src/App.tsx",
+        },
+        {
+          type: "skill",
+          name: "frontend-design",
+          path: "/skills/frontend-design/SKILL.md",
+        },
+      ],
     });
 
     const readModel = await harness.readModel();
@@ -1692,6 +1782,65 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
+  it("resumes a persisted native provider thread on its first turn", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+    const threadId = ThreadId.make("thread-native-fork");
+
+    // This harness owns a scoped runtime across imperative event assertions.
+    // oxlint-disable-next-line t3code/no-manual-effect-runtime-in-tests
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-create-native-fork"),
+        threadId,
+        projectId: ProjectId.make("project-1"),
+        title: "Native fork",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        branch: null,
+        worktreePath: null,
+        providerResumeCursor: { threadId: "provider-thread-fork-1" },
+        createdAt: now,
+      }),
+    );
+    await harness.drain();
+    const createdThread = (await harness.readModel()).threads.find(
+      (thread) => thread.id === threadId,
+    );
+    expect(createdThread?.providerResumeCursor).toEqual({
+      threadId: "provider-thread-fork-1",
+    });
+    // This harness owns a scoped runtime across imperative event assertions.
+    // oxlint-disable-next-line t3code/no-manual-effect-runtime-in-tests
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-start-native-fork"),
+        threadId,
+        message: {
+          messageId: asMessageId("message-native-fork"),
+          role: "user",
+          text: "Continue the fork",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.startSession.mock.calls.length === 1);
+    expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
+      threadId,
+      resumeCursor: { threadId: "provider-thread-fork-1" },
+    });
+  });
+
   it("rejects active runtime sessions that are missing provider instance ids", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
@@ -2057,6 +2206,8 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
 
+    // This harness owns a scoped runtime across imperative event assertions.
+    // oxlint-disable-next-line t3code/no-manual-effect-runtime-in-tests
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.session.set",
@@ -2076,6 +2227,8 @@ describe("ProviderCommandReactor", () => {
       }),
     );
 
+    // This harness owns a scoped runtime across imperative event assertions.
+    // oxlint-disable-next-line t3code/no-manual-effect-runtime-in-tests
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.session.stop",

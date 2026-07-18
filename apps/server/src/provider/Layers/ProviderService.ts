@@ -874,6 +874,25 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     },
   );
 
+  const syncThreadLifecycle: ProviderServiceMethod<"syncThreadLifecycle"> = Effect.fn(
+    "syncThreadLifecycle",
+  )(function* (input) {
+    const routed = yield* resolveRoutableSession({
+      threadId: input.threadId,
+      operation: "ProviderService.syncThreadLifecycle",
+      allowRecovery: false,
+    });
+    if (!routed.isActive || !routed.adapter.syncThreadLifecycle) {
+      yield* Effect.logDebug("provider thread lifecycle sync unavailable", {
+        threadId: input.threadId,
+        action: input.action.type,
+        provider: routed.adapter.provider,
+      });
+      return;
+    }
+    yield* routed.adapter.syncThreadLifecycle(routed.threadId, input.action);
+  });
+
   const listSessions: ProviderServiceMethod<"listSessions"> = Effect.fn("listSessions")(
     function* () {
       const currentAdapters = yield* getAdapterEntries;
@@ -1079,6 +1098,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     getCapabilities,
     getInstanceInfo,
     rollbackConversation,
+    syncThreadLifecycle,
     // Each access creates a fresh PubSub subscription so that multiple
     // consumers (ProviderRuntimeIngestion, CheckpointReactor, etc.) each
     // independently receive all runtime events.

@@ -124,7 +124,12 @@ export const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
 export const ProviderInteractionMode = Schema.Literals(["default", "plan"]);
 export type ProviderInteractionMode = typeof ProviderInteractionMode.Type;
 export const DEFAULT_PROVIDER_INTERACTION_MODE: ProviderInteractionMode = "default";
-export const ProviderRequestKind = Schema.Literals(["command", "file-read", "file-change"]);
+export const ProviderRequestKind = Schema.Literals([
+  "command",
+  "file-read",
+  "file-change",
+  "permissions",
+]);
 export type ProviderRequestKind = typeof ProviderRequestKind.Type;
 export const AssistantDeliveryMode = Schema.Literals(["buffered", "streaming"]);
 export type AssistantDeliveryMode = typeof AssistantDeliveryMode.Type;
@@ -177,6 +182,20 @@ export const ChatAttachment = Schema.Union([ChatImageAttachment]);
 export type ChatAttachment = typeof ChatAttachment.Type;
 const UploadChatAttachment = Schema.Union([UploadChatImageAttachment]);
 export type UploadChatAttachment = typeof UploadChatAttachment.Type;
+
+export const ProviderStructuredInput = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("skill"),
+    name: TrimmedNonEmptyString,
+    path: TrimmedNonEmptyString,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("mention"),
+    name: TrimmedNonEmptyString,
+    path: TrimmedNonEmptyString,
+  }),
+]);
+export type ProviderStructuredInput = typeof ProviderStructuredInput.Type;
 
 export const ProjectScriptIcon = Schema.Literals([
   "play",
@@ -352,6 +371,7 @@ export const OrchestrationThread = Schema.Struct({
   ),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  providerResumeCursor: Schema.optional(Schema.Struct({ threadId: TrimmedNonEmptyString })),
   latestTurn: Schema.NullOr(OrchestrationLatestTurn),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -398,6 +418,7 @@ export const OrchestrationThreadShell = Schema.Struct({
   ),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  providerResumeCursor: Schema.optional(Schema.Struct({ threadId: TrimmedNonEmptyString })),
   latestTurn: Schema.NullOr(OrchestrationLatestTurn),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -524,6 +545,7 @@ const ThreadCreateCommand = Schema.Struct({
   ),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  providerResumeCursor: Schema.optional(Schema.Struct({ threadId: TrimmedNonEmptyString })),
   createdAt: IsoDateTime,
 });
 
@@ -607,6 +629,7 @@ export const ThreadTurnStartCommand = Schema.Struct({
     role: Schema.Literal("user"),
     text: Schema.String,
     attachments: Schema.Array(ChatAttachment),
+    structuredInputs: Schema.optional(Schema.Array(ProviderStructuredInput)),
   }),
   modelSelection: Schema.optional(ModelSelection),
   titleSeed: Schema.optional(TrimmedNonEmptyString),
@@ -628,6 +651,7 @@ const ClientThreadTurnStartCommand = Schema.Struct({
     role: Schema.Literal("user"),
     text: Schema.String,
     attachments: Schema.Array(UploadChatAttachment),
+    structuredInputs: Schema.optional(Schema.Array(ProviderStructuredInput)),
   }),
   modelSelection: Schema.optional(ModelSelection),
   titleSeed: Schema.optional(TrimmedNonEmptyString),
@@ -679,6 +703,40 @@ const ThreadSessionStopCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const ThreadCompactCommand = Schema.Struct({
+  type: Schema.Literal("thread.compact"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  createdAt: IsoDateTime,
+});
+
+export const ThreadReviewTarget = Schema.Union([
+  Schema.Struct({ type: Schema.Literal("uncommittedChanges") }),
+  Schema.Struct({
+    type: Schema.Literal("baseBranch"),
+    branch: TrimmedNonEmptyString,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("commit"),
+    sha: TrimmedNonEmptyString,
+    title: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  }),
+  Schema.Struct({
+    type: Schema.Literal("custom"),
+    instructions: TrimmedNonEmptyString,
+  }),
+]);
+export type ThreadReviewTarget = typeof ThreadReviewTarget.Type;
+
+const ThreadReviewStartCommand = Schema.Struct({
+  type: Schema.Literal("thread.review.start"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  target: ThreadReviewTarget,
+  delivery: Schema.Literals(["inline", "detached"]),
+  createdAt: IsoDateTime,
+});
+
 const DispatchableClientOrchestrationCommand = Schema.Union([
   ProjectCreateCommand,
   ProjectMetaUpdateCommand,
@@ -696,6 +754,8 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadUserInputRespondCommand,
   ThreadCheckpointRevertCommand,
   ThreadSessionStopCommand,
+  ThreadCompactCommand,
+  ThreadReviewStartCommand,
 ]);
 export type DispatchableClientOrchestrationCommand =
   typeof DispatchableClientOrchestrationCommand.Type;
@@ -717,6 +777,8 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadUserInputRespondCommand,
   ThreadCheckpointRevertCommand,
   ThreadSessionStopCommand,
+  ThreadCompactCommand,
+  ThreadReviewStartCommand,
 ]);
 export type ClientOrchestrationCommand = typeof ClientOrchestrationCommand.Type;
 
@@ -821,6 +883,8 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.checkpoint-revert-requested",
   "thread.reverted",
   "thread.session-stop-requested",
+  "thread.compact-requested",
+  "thread.review-start-requested",
   "thread.session-set",
   "thread.proposed-plan-upserted",
   "thread.turn-diff-completed",
@@ -869,6 +933,7 @@ export const ThreadCreatedPayload = Schema.Struct({
   ),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  providerResumeCursor: Schema.optional(Schema.Struct({ threadId: TrimmedNonEmptyString })),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -927,6 +992,7 @@ export const ThreadMessageSentPayload = Schema.Struct({
 export const ThreadTurnStartRequestedPayload = Schema.Struct({
   threadId: ThreadId,
   messageId: MessageId,
+  structuredInputs: Schema.optional(Schema.Array(ProviderStructuredInput)),
   modelSelection: Schema.optional(ModelSelection),
   titleSeed: Schema.optional(TrimmedNonEmptyString),
   runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(Effect.succeed(DEFAULT_RUNTIME_MODE))),
@@ -970,6 +1036,18 @@ export const ThreadRevertedPayload = Schema.Struct({
 
 export const ThreadSessionStopRequestedPayload = Schema.Struct({
   threadId: ThreadId,
+  createdAt: IsoDateTime,
+});
+
+export const ThreadCompactRequestedPayload = Schema.Struct({
+  threadId: ThreadId,
+  createdAt: IsoDateTime,
+});
+
+export const ThreadReviewStartRequestedPayload = Schema.Struct({
+  threadId: ThreadId,
+  target: ThreadReviewTarget,
+  delivery: Schema.Literals(["inline", "detached"]),
   createdAt: IsoDateTime,
 });
 
@@ -1110,6 +1188,16 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.session-stop-requested"),
     payload: ThreadSessionStopRequestedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.compact-requested"),
+    payload: ThreadCompactRequestedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.review-start-requested"),
+    payload: ThreadReviewStartRequestedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

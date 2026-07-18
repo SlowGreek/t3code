@@ -1,4 +1,4 @@
-import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
+import * as NodeHttpServerModule from "@effect/platform-node/NodeHttpServer";
 import * as NodeSocket from "@effect/platform-node/NodeSocket";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeCrypto from "node:crypto";
@@ -38,7 +38,7 @@ import {
 } from "@t3tools/shared/dpop";
 import { RELAY_HEALTH_REQUEST_TYP, RELAY_MINT_REQUEST_TYP } from "@t3tools/shared/relayJwt";
 import * as RelayClient from "@t3tools/shared/relayClient";
-import { assert, it } from "@effect/vitest";
+import { assert, it as effectIt, type Vitest } from "@effect/vitest";
 import { assertFailure, assertInclude, assertTrue } from "@effect/vitest/utils";
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
@@ -47,11 +47,13 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PubSub from "effect/PubSub";
+import * as Semaphore from "effect/Semaphore";
+import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+
 import * as TestClock from "effect/testing/TestClock";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import {
@@ -66,9 +68,10 @@ import {
 import { OtlpSerialization, OtlpTracer } from "effect/unstable/observability";
 import { RpcClient, RpcSerialization } from "effect/unstable/rpc";
 import * as Socket from "effect/unstable/socket/Socket";
-import { vi } from "vite-plus/test";
+import { describe, type TestContext, type TestOptions, vi } from "vite-plus/test";
 
 const TEST_EPOCH = DateTime.makeUnsafe("1970-01-01T00:00:00.000Z");
+const routerTestSemaphore = Effect.runSync(Semaphore.make(1));
 
 import * as ServerConfig from "./config.ts";
 import { makeRoutesLayer } from "./server.ts";
@@ -114,6 +117,12 @@ import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import * as Data from "effect/Data";
 
+const NodeHttpServer = {
+  ...NodeHttpServerModule,
+  get layerTest() {
+    return Layer.fresh(NodeHttpServerModule.layerTest);
+  },
+};
 const defaultProjectId = ProjectId.make("project-default");
 const defaultThreadId = ThreadId.make("thread-default");
 const defaultDesktopBootstrapToken = "test-desktop-bootstrap-token";
@@ -281,26 +290,23 @@ const makeBrowserOtlpPayload = (spanName: string) =>
       ({ close }) => Effect.promise(close),
     );
 
-    const runtime = ManagedRuntime.make(
-      OtlpTracer.layer({
-        url: collector.url,
-        exportInterval: "10 millis",
-        resource: {
-          serviceName: "t3-web",
-          attributes: {
-            "service.runtime": "t3-web",
-            "service.mode": "browser",
-            "service.version": "test",
+    yield* Effect.void.pipe(
+      Effect.withSpan(spanName),
+      Effect.provide(
+        OtlpTracer.layer({
+          url: collector.url,
+          exportInterval: "10 millis",
+          resource: {
+            serviceName: "t3-web",
+            attributes: {
+              "service.runtime": "t3-web",
+              "service.mode": "browser",
+              "service.version": "test",
+            },
           },
-        },
-      }).pipe(Layer.provide(browserOtlpTracingLayer)),
+        }).pipe(Layer.provide(browserOtlpTracingLayer)),
+      ),
     );
-
-    try {
-      yield* Effect.promise(() => runtime.runPromise(Effect.void.pipe(Effect.withSpan(spanName))));
-    } finally {
-      yield* Effect.promise(() => runtime.dispose());
-    }
 
     const request = yield* Effect.raceFirst(
       Effect.promise(() => collector.firstRequest).pipe(Effect.orDie),
@@ -806,7 +812,9 @@ const buildAppUnderTest = (options?: {
       Layer.provide(layerConfig),
     );
 
-    yield* Layer.build(appLayer);
+    const appMemoMap = yield* Layer.makeMemoMap;
+    const appScope = yield* Effect.scope;
+    yield* Layer.buildWithMemoMap(appLayer, appMemoMap, appScope);
     return config;
   });
 
@@ -1231,7 +1239,32 @@ const getWsServerUrl = (
     );
   });
 
-it.layer(NodeServices.layer)("server router seam", (it) => {
+describe.sequential("server router seam", () => {
+  type NodeTestContext = Layer.Success<typeof NodeServices.layer> | Scope.Scope;
+  type NodeTestEffect = <A, E>(
+    name: string,
+    self: Vitest.TestFunction<A, E, NodeTestContext, [TestContext]>,
+    options?: number | TestOptions,
+  ) => void;
+  const sequentialEffect: NodeTestEffect = (name, self, options) =>
+    effectIt.effect(
+      name,
+      (context) =>
+        routerTestSemaphore
+          .withPermit(
+            Effect.gen(function* () {
+              const memoMap = yield* Layer.makeMemoMap;
+              return self(context).pipe(
+                Effect.provide(NodeServices.layer),
+                Effect.scoped,
+                Effect.provideService(Layer.CurrentMemoMap, memoMap),
+              );
+            }).pipe(Effect.flatten),
+          )
+          .pipe(Effect.orDie),
+      options,
+    );
+  const it = { effect: sequentialEffect };
   it.effect("serves static index content for GET / when staticDir is configured", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -4934,7 +4967,11 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               }),
             createWorktree: () =>
               Effect.succeed({
-                worktree: { path: "/tmp/wt", refName: "feature/demo" },
+                worktree: {
+                  path: "/tmp/wt",
+                  refName: "feature/demo",
+                  ownership: "managed" as const,
+                },
               }),
             removeWorktree: () => Effect.void,
             createRef: (input) => Effect.succeed({ refName: input.refName }),
@@ -6198,6 +6235,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 worktree: {
                   refName: "t3code/bootstrap-refName",
                   path: "/tmp/bootstrap-worktree",
+                  ownership: "managed" as const,
                 },
               };
             }),
@@ -6347,6 +6385,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             worktree: {
               refName: "t3code/bootstrap-refName",
               path: "/tmp/bootstrap-worktree",
+              ownership: "managed" as const,
             },
           }),
       );
@@ -6452,6 +6491,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             worktree: {
               refName: "t3code/bootstrap-refName",
               path: "/tmp/bootstrap-worktree",
+              ownership: "managed" as const,
             },
           }),
       );

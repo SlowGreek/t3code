@@ -40,6 +40,19 @@ import { ServerConfig } from "../config.ts";
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 1_000_000;
 const OUTPUT_TRUNCATED_MARKER = "\n\n[truncated]";
+const WORKTREE_INCLUDE_FILE = ".worktreeinclude";
+const WORKTREE_ALWAYS_COPY_FILES = ["AGENTS.override.md"] as const;
+
+export function parseWorktreeIncludeFile(content: string): ReadonlyArray<string> {
+  return [
+    ...new Set(
+      content
+        .split(/\r?\n/u)
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0 && !line.startsWith("#")),
+    ),
+  ];
+}
 const PREPARED_COMMIT_PATCH_MAX_OUTPUT_BYTES = 49_000;
 const RANGE_COMMIT_SUMMARY_MAX_OUTPUT_BYTES = 19_000;
 const RANGE_DIFF_SUMMARY_MAX_OUTPUT_BYTES = 19_000;
@@ -2272,6 +2285,145 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       fallbackErrorDetail: "git worktree add failed",
     });
 
+    if (input.applyCurrentChanges) {
+      const patch = yield* runGitStdout("GitVcsDriver.createWorktree.captureChanges", input.cwd, [
+        "diff",
+        "--binary",
+        "HEAD",
+      ]);
+      if (patch.length > 0) {
+        yield* executeGit(
+          "GitVcsDriver.createWorktree.applyChanges",
+          worktreePath,
+          ["apply", "--whitespace=nowarn", "-"],
+          {
+            stdin: patch,
+            fallbackErrorDetail: "failed to apply current changes to worktree",
+          },
+        );
+      }
+    }
+
+    const fileOperationError = (operation: string, detail: string, cause: unknown) =>
+      new GitCommandError({
+        operation,
+        command: "copy-worktree-includes",
+        cwd: input.cwd,
+        detail,
+        cause,
+      });
+    const readOptionalFile = (filePath: string) =>
+      fileSystem.readFileString(filePath, "utf8").pipe(
+        Effect.map(Option.some),
+        Effect.catch((cause) =>
+          cause.reason._tag === "NotFound"
+            ? Effect.succeed(Option.none<string>())
+            : Effect.fail(
+                fileOperationError(
+                  "GitVcsDriver.createWorktree.readIncludes",
+                  `Failed to read optional worktree include file '${filePath}'.`,
+                  cause,
+                ),
+              ),
+        ),
+      );
+    const includeFile = yield* readOptionalFile(path.join(input.cwd, WORKTREE_INCLUDE_FILE));
+    const includedPaths = new Set([
+      ...WORKTREE_ALWAYS_COPY_FILES,
+      ...(Option.isSome(includeFile) ? parseWorktreeIncludeFile(includeFile.value) : []),
+    ]);
+
+    for (const includedPath of includedPaths) {
+      const pathSegments = includedPath.split(/[\\/]/u);
+      if (
+        path.isAbsolute(includedPath) ||
+        pathSegments.includes("..") ||
+        pathSegments.every((segment) => segment === "" || segment === ".")
+      ) {
+        return yield* fileOperationError(
+          "GitVcsDriver.createWorktree.validateIncludes",
+          `Worktree include path must be repository-relative: '${includedPath}'.`,
+          new Error("Invalid worktree include path."),
+        );
+      }
+
+      if (input.restoreSnapshotPath) {
+        const snapshotInfo = yield* fileSystem
+          .stat(input.restoreSnapshotPath)
+          .pipe(
+            Effect.mapError((cause) =>
+              fileOperationError(
+                "GitVcsDriver.createWorktree.inspectSnapshot",
+                `Failed to inspect worktree snapshot '${input.restoreSnapshotPath}'.`,
+                cause,
+              ),
+            ),
+          );
+        if (snapshotInfo.type !== "Directory") {
+          return yield* fileOperationError(
+            "GitVcsDriver.createWorktree.restoreSnapshot",
+            `Worktree snapshot is not a directory: '${input.restoreSnapshotPath}'.`,
+            new Error("Invalid worktree snapshot."),
+          );
+        }
+        const gitFilePath = path.join(worktreePath, ".git");
+        const gitMetadata = yield* fileSystem
+          .readFileString(gitFilePath, "utf8")
+          .pipe(
+            Effect.mapError((cause) =>
+              fileOperationError(
+                "GitVcsDriver.createWorktree.readGitMetadata",
+                "Failed to preserve linked-worktree Git metadata before snapshot restore.",
+                cause,
+              ),
+            ),
+          );
+        yield* fileSystem.copy(input.restoreSnapshotPath, worktreePath, { overwrite: true }).pipe(
+          Effect.andThen(fileSystem.writeFileString(gitFilePath, gitMetadata)),
+          Effect.mapError((cause) =>
+            fileOperationError(
+              "GitVcsDriver.createWorktree.restoreSnapshot",
+              `Failed to restore worktree snapshot '${input.restoreSnapshotPath}'.`,
+              cause,
+            ),
+          ),
+        );
+      }
+
+      const sourcePath = path.join(input.cwd, includedPath);
+      const sourceInfo = yield* fileSystem.stat(sourcePath).pipe(
+        Effect.map(Option.some),
+        Effect.catch((cause) =>
+          cause.reason._tag === "NotFound"
+            ? Effect.succeed(Option.none<FileSystem.File.Info>())
+            : Effect.fail(
+                fileOperationError(
+                  "GitVcsDriver.createWorktree.inspectInclude",
+                  `Failed to inspect worktree include '${includedPath}'.`,
+                  cause,
+                ),
+              ),
+        ),
+      );
+      if (Option.isNone(sourceInfo)) continue;
+
+      const targetPath = path.join(worktreePath, includedPath);
+      yield* fileSystem.makeDirectory(path.dirname(targetPath), { recursive: true }).pipe(
+        Effect.andThen(
+          sourceInfo.value.type === "Directory"
+            ? fileSystem.copy(sourcePath, targetPath, { overwrite: true })
+            : fileSystem.copyFile(sourcePath, targetPath),
+        ),
+        Effect.mapError((cause) =>
+          fileOperationError(
+            "GitVcsDriver.createWorktree.copyInclude",
+            `Failed to copy worktree include '${includedPath}'.`,
+            cause,
+          ),
+        ),
+      );
+    }
+
     if (input.newRefName && input.baseRefName) {
       const remoteNames = yield* listRemoteNames(input.cwd).pipe(Effect.orElseSucceed(() => []));
       const parsedBaseRef = parseRemoteRefWithRemoteNames(
@@ -2290,6 +2442,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       worktree: {
         path: worktreePath,
         refName: targetBranch,
+        ownership: input.path === undefined ? "managed" : "permanent",
       },
     };
   });
@@ -2389,6 +2542,34 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   const removeWorktree: GitVcsDriver.GitVcsDriver["Service"]["removeWorktree"] = Effect.fn(
     "removeWorktree",
   )(function* (input) {
+    if (input.snapshotPath) {
+      const relativeSnapshotPath = path.relative(input.path, input.snapshotPath);
+      if (
+        relativeSnapshotPath === "" ||
+        (!relativeSnapshotPath.startsWith("..") && !path.isAbsolute(relativeSnapshotPath))
+      ) {
+        return yield* new GitCommandError({
+          operation: "GitVcsDriver.removeWorktree.snapshot",
+          command: "snapshot-worktree",
+          cwd: input.cwd,
+          detail: "Worktree snapshot path must be outside the worktree being removed.",
+          cause: new Error("Invalid worktree snapshot path."),
+        });
+      }
+      yield* fileSystem.remove(input.snapshotPath, { recursive: true, force: true }).pipe(
+        Effect.andThen(fileSystem.copy(input.path, input.snapshotPath, { overwrite: true })),
+        Effect.mapError(
+          (cause) =>
+            new GitCommandError({
+              operation: "GitVcsDriver.removeWorktree.snapshot",
+              command: "snapshot-worktree",
+              cwd: input.cwd,
+              detail: `Failed to snapshot worktree to '${input.snapshotPath}'.`,
+              cause,
+            }),
+        ),
+      );
+    }
     const args = ["worktree", "remove"];
     if (input.force) {
       args.push("--force");

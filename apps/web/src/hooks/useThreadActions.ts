@@ -51,6 +51,12 @@ export function useThreadActions() {
     reportFailure: false,
   });
   const stopThreadSession = useAtomCommand(threadEnvironment.stopSession);
+  const compactThreadMutation = useAtomCommand(threadEnvironment.compact, {
+    reportFailure: false,
+  });
+  const startReviewMutation = useAtomCommand(threadEnvironment.startReview, {
+    reportFailure: false,
+  });
   const removeWorktree = useAtomCommand(vcsEnvironment.removeWorktree, {
     reportFailure: false,
   });
@@ -200,7 +206,7 @@ export function useThreadActions() {
               "This thread is the only one linked to this worktree:",
               displayWorktreePath ?? orphanedWorktreePath,
               "",
-              "Delete the worktree too?",
+              "Snapshot and remove the worktree too?",
             ].join("\n"),
           ),
         );
@@ -288,12 +294,14 @@ export function useThreadActions() {
         return deleteResult;
       }
 
+      const snapshotPath = `${orphanedWorktreePath}.t3-snapshot-${threadRef.threadId}`;
       const removeResult = await removeWorktree({
         environmentId: threadRef.environmentId,
         input: {
           cwd: threadProject.workspaceRoot,
           path: orphanedWorktreePath,
           force: true,
+          snapshotPath,
         },
       });
       const refreshResult =
@@ -327,6 +335,13 @@ export function useThreadActions() {
         );
         return cleanupFailure;
       }
+      toastManager.add(
+        stackedThreadToast({
+          type: "success",
+          title: "Worktree snapshot saved",
+          description: `Saved recoverable state to ${snapshotPath}.`,
+        }),
+      );
       return deleteResult;
     },
     [
@@ -345,6 +360,38 @@ export function useThreadActions() {
     ],
   );
 
+  const compactThread = useCallback(
+    (target: ScopedThreadRef) =>
+      compactThreadMutation({
+        environmentId: target.environmentId,
+        input: { threadId: target.threadId },
+      }),
+    [compactThreadMutation],
+  );
+
+  const startReview = useCallback(
+    (
+      target: ScopedThreadRef,
+      review: {
+        readonly target:
+          | { readonly type: "uncommittedChanges" }
+          | { readonly type: "baseBranch"; readonly branch: string }
+          | { readonly type: "commit"; readonly sha: string; readonly title?: string | null }
+          | { readonly type: "custom"; readonly instructions: string };
+        readonly delivery: "inline" | "detached";
+      },
+    ) =>
+      startReviewMutation({
+        environmentId: target.environmentId,
+        input: {
+          threadId: target.threadId,
+          target: review.target,
+          delivery: review.delivery,
+        },
+      }),
+    [startReviewMutation],
+  );
+
   const confirmAndDeleteThread = useCallback(
     async (target: ScopedThreadRef) => {
       const localApi = readLocalApi();
@@ -360,6 +407,7 @@ export function useThreadActions() {
             ].join("\n"),
           ),
         );
+
         if (confirmationResult._tag === "Failure") {
           return confirmationResult;
         }
@@ -379,7 +427,16 @@ export function useThreadActions() {
       unarchiveThread,
       deleteThread,
       confirmAndDeleteThread,
+      compactThread,
+      startReview,
     }),
-    [archiveThread, confirmAndDeleteThread, deleteThread, unarchiveThread],
+    [
+      archiveThread,
+      compactThread,
+      confirmAndDeleteThread,
+      deleteThread,
+      startReview,
+      unarchiveThread,
+    ],
   );
 }

@@ -7,10 +7,14 @@
  * @module ProviderRegistry
  */
 import type {
+  CodexMcpOperation,
+  CodexMcpRequestError,
+  CodexMcpResult,
   ProviderInstanceId,
   ProviderDriverKind,
   ServerProvider,
   ServerProviderUpdateState,
+  ThreadId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
@@ -68,6 +72,12 @@ export interface ProviderRegistryShape {
     readonly action: ProviderMaintenanceActionKind;
     readonly state: ServerProviderUpdateState | null;
   }) => Effect.Effect<ReadonlyArray<ServerProvider>>;
+
+  readonly manageCodexMcp?: (
+    instanceId: ProviderInstanceId,
+    threadId: ThreadId,
+    operation: CodexMcpOperation,
+  ) => Effect.Effect<CodexMcpResult, CodexMcpRequestError>;
 
   /**
    * Stream of provider snapshot updates — one emission per aggregated

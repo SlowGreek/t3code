@@ -298,6 +298,10 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:process-resource-history",
       tag: WS_METHODS.serverGetProcessResourceHistory,
     }),
+    codexMcp: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:codex-mcp",
+      tag: WS_METHODS.serverCodexMcpRequest,
+    }),
     configProjection,
     welcome: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:server:welcome",

@@ -23,6 +23,7 @@
  * @module ProviderRegistryLive
  */
 import {
+  CodexMcpRequestError,
   defaultInstanceIdForDriver,
   ProviderDriverKind,
   type ProviderInstanceId,
@@ -679,8 +680,39 @@ export const ProviderRegistryLive = Layer.effect(
       yield* Effect.logError("provider registry refresh failed; preserving cached providers", {
         cause: Cause.pretty(cause),
       });
+
       return yield* Ref.get(providersRef);
     });
+
+    const manageCodexMcp: NonNullable<ProviderRegistryShape["manageCodexMcp"]> = (
+      instanceId,
+      threadId,
+      operation,
+    ) =>
+      Effect.gen(function* () {
+        const instance = yield* instanceRegistry.getInstance(instanceId);
+        if (!instance) {
+          return yield* new CodexMcpRequestError({
+            operation: operation.type,
+            detail: `Provider instance '${instanceId}' is not available.`,
+          });
+        }
+        if (!instance.adapter.manageCodexMcp) {
+          return yield* new CodexMcpRequestError({
+            operation: operation.type,
+            detail: "This provider instance does not support native Codex MCP management.",
+          });
+        }
+        return yield* instance.adapter.manageCodexMcp(threadId, operation).pipe(
+          Effect.mapError(
+            (cause) =>
+              new CodexMcpRequestError({
+                operation: operation.type,
+                detail: cause.message,
+              }),
+          ),
+        );
+      });
 
     return {
       getProviders: Ref.get(providersRef),
@@ -690,6 +722,7 @@ export const ProviderRegistryLive = Layer.effect(
         refreshInstance(instanceId).pipe(Effect.catchCause(recoverRefreshFailure)),
       getProviderMaintenanceCapabilitiesForInstance,
       setProviderMaintenanceActionState,
+      manageCodexMcp,
       get streamChanges() {
         return Stream.fromPubSub(changesPubSub);
       },

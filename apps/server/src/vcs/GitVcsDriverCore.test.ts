@@ -12,7 +12,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import { GitCommandError } from "@t3tools/contracts";
 import { ServerConfig } from "../config.ts";
-import { splitNullSeparatedGitStdoutPaths } from "./GitVcsDriverCore.ts";
+import { parseWorktreeIncludeFile, splitNullSeparatedGitStdoutPaths } from "./GitVcsDriverCore.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
 
 const ServerConfigLayer = ServerConfig.layerTest(process.cwd(), {
@@ -22,6 +22,20 @@ const TestLayer = GitVcsDriver.layer.pipe(
   Layer.provide(ServerConfigLayer),
   Layer.provideMerge(NodeServices.layer),
 );
+
+describe("parseWorktreeIncludeFile", () => {
+  it("normalizes comments, blanks, and duplicate relative entries", () => {
+    assert.deepEqual(
+      parseWorktreeIncludeFile(`
+# Local-only worktree files
+.env.local
+config/private.json
+.env.local
+`),
+      [".env.local", "config/private.json"],
+    );
+  });
+});
 
 const makeNonRepositoryHandle = () =>
   ChildProcessSpawner.makeHandle({
@@ -69,7 +83,7 @@ const git = (
     const result = yield* driver.execute({
       operation: "GitVcsDriver.test.git",
       cwd,
-      args,
+      args: ["-c", "safe.bareRepository=all", ...args],
       ...(env ? { env } : {}),
       timeoutMs: 10_000,
     });
@@ -650,22 +664,63 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
           yield* makeTmpDir("git-worktrees-"),
           "feature-worktree",
         );
+        const snapshotPath = pathService.join(
+          yield* makeTmpDir("git-worktree-snapshots-"),
+          "feature-worktree",
+        );
         const driver = yield* GitVcsDriver.GitVcsDriver;
+        const fileSystem = yield* FileSystem.FileSystem;
+        yield* writeTextFile(cwd, "README.md", "# locally modified\n");
+        yield* writeTextFile(cwd, ".worktreeinclude", ".env.local\n");
+        yield* writeTextFile(cwd, ".env.local", "LOCAL_ONLY=1\n");
+        yield* writeTextFile(cwd, "AGENTS.override.md", "Local agent guidance\n");
 
         const created = yield* driver.createWorktree({
           cwd,
           path: worktreePath,
           refName: initialBranch,
           newRefName: "feature/worktree",
+          applyCurrentChanges: true,
         });
 
         assert.equal(created.worktree.path, worktreePath);
         assert.equal(created.worktree.refName, "feature/worktree");
+        assert.equal(created.worktree.ownership, "permanent");
         assert.equal(yield* git(worktreePath, ["branch", "--show-current"]), "feature/worktree");
+        assert.equal(
+          yield* fileSystem.readFileString(pathService.join(worktreePath, "README.md")),
+          "# locally modified\n",
+        );
+        assert.equal(
+          yield* fileSystem.readFileString(pathService.join(worktreePath, ".env.local")),
+          "LOCAL_ONLY=1\n",
+        );
+        assert.equal(
+          yield* fileSystem.readFileString(pathService.join(worktreePath, "AGENTS.override.md")),
+          "Local agent guidance\n",
+        );
+        yield* writeTextFile(worktreePath, "draft.txt", "uncommitted draft\n");
 
-        yield* driver.removeWorktree({ cwd, path: worktreePath });
-        const fileSystem = yield* FileSystem.FileSystem;
+        yield* driver.removeWorktree({
+          cwd,
+          path: worktreePath,
+          force: true,
+          snapshotPath,
+        });
         assert.equal(yield* fileSystem.exists(worktreePath), false);
+
+        yield* driver.createWorktree({
+          cwd,
+          path: worktreePath,
+          refName: "feature/worktree",
+          restoreSnapshotPath: snapshotPath,
+        });
+        assert.equal(
+          yield* fileSystem.readFileString(pathService.join(worktreePath, "draft.txt")),
+          "uncommitted draft\n",
+        );
+        assert.equal(yield* git(worktreePath, ["branch", "--show-current"]), "feature/worktree");
+        yield* driver.removeWorktree({ cwd, path: worktreePath, force: true });
       }),
     );
   });

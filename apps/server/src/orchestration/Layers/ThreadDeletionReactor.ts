@@ -14,6 +14,12 @@ import {
 } from "../Services/ThreadDeletionReactor.ts";
 
 type ThreadDeletedEvent = Extract<OrchestrationEvent, { type: "thread.deleted" }>;
+type ThreadLifecycleEvent = Extract<
+  OrchestrationEvent,
+  {
+    type: "thread.deleted" | "thread.archived" | "thread.unarchived" | "thread.meta-updated";
+  }
+>;
 
 export const logCleanupCauseUnlessInterrupted = <R, E>({
   effect,
@@ -56,14 +62,41 @@ const make = Effect.gen(function* () {
     });
 
   const processThreadDeleted = Effect.fn("processThreadDeleted")(function* (
-    event: ThreadDeletedEvent,
+    event: ThreadLifecycleEvent,
   ) {
     const { threadId } = event.payload;
-    yield* stopProviderSession(threadId);
-    yield* closeThreadTerminals(threadId);
+    switch (event.type) {
+      case "thread.archived":
+        yield* providerService.syncThreadLifecycle({
+          threadId,
+          action: { type: "archive" },
+        });
+        return;
+      case "thread.unarchived":
+        yield* providerService.syncThreadLifecycle({
+          threadId,
+          action: { type: "unarchive" },
+        });
+        return;
+      case "thread.meta-updated":
+        if (event.payload.title) {
+          yield* providerService.syncThreadLifecycle({
+            threadId,
+            action: { type: "name", name: event.payload.title },
+          });
+        }
+        return;
+      case "thread.deleted":
+        yield* providerService.syncThreadLifecycle({
+          threadId,
+          action: { type: "delete" },
+        });
+        yield* stopProviderSession(threadId);
+        yield* closeThreadTerminals(threadId);
+    }
   });
 
-  const processThreadDeletedSafely = (event: ThreadDeletedEvent) =>
+  const processThreadDeletedSafely = (event: ThreadLifecycleEvent) =>
     processThreadDeleted(event).pipe(
       Effect.catchCause((cause) => {
         if (Cause.hasInterruptsOnly(cause)) {
@@ -82,10 +115,15 @@ const make = Effect.gen(function* () {
   const start: ThreadDeletionReactorShape["start"] = Effect.fn("start")(function* () {
     yield* Effect.forkScoped(
       Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
-        if (event.type !== "thread.deleted") {
-          return Effect.void;
+        switch (event.type) {
+          case "thread.deleted":
+          case "thread.archived":
+          case "thread.unarchived":
+          case "thread.meta-updated":
+            return worker.enqueue(event);
+          default:
+            return Effect.void;
         }
-        return worker.enqueue(event);
       }),
     );
   });

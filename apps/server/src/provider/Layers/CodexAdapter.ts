@@ -33,6 +33,7 @@ import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+import * as SynchronizedRef from "effect/SynchronizedRef";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import * as CodexErrors from "effect-codex-app-server/errors";
 import * as EffectCodexSchema from "effect-codex-app-server/schema";
@@ -54,8 +55,11 @@ import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import {
   CodexResumeCursorSchema,
+  makeCodexAppServerConnection,
   CodexSessionRuntimeThreadIdMissingError,
   makeCodexSessionRuntime,
+  type CodexAppServerConnection,
+  type CodexAppServerConnectionOptions,
   type CodexSessionRuntimeError,
   type CodexSessionRuntimeOptions,
   type CodexSessionRuntimeShape,
@@ -78,6 +82,13 @@ export interface CodexAdapterLiveOptions {
   ) => Effect.Effect<
     CodexSessionRuntimeShape,
     CodexSessionRuntimeError,
+    ChildProcessSpawner.ChildProcessSpawner | Scope.Scope
+  >;
+  readonly makeConnection?: (
+    options: CodexAppServerConnectionOptions,
+  ) => Effect.Effect<
+    CodexAppServerConnection,
+    CodexErrors.CodexAppServerError,
     ChildProcessSpawner.ChildProcessSpawner | Scope.Scope
   >;
   readonly nativeEventLogPath?: string;
@@ -296,6 +307,8 @@ function toRequestTypeFromMethod(method: string): CanonicalRequestType {
       return "apply_patch_approval";
     case "execCommandApproval":
       return "exec_command_approval";
+    case "item/permissions/requestApproval":
+      return "permissions_approval";
     case "item/tool/requestUserInput":
       return "tool_user_input";
     case "item/tool/call":
@@ -315,6 +328,8 @@ function toRequestTypeFromKind(kind: ProviderRequestKind | undefined): Canonical
       return "file_read_approval";
     case "file-change":
       return "file_change_approval";
+    case "permissions":
+      return "permissions_approval";
     default:
       return "unknown";
   }
@@ -349,7 +364,7 @@ function toUserInputQuestions(questions: ReadonlyArray<CodexToolUserInputQuestio
       const id = trimText(question.id);
       const header = trimText(question.header);
       const prompt = trimText(question.question);
-      if (!id || !header || !prompt || options.length === 0) {
+      if (!id || !header || !prompt) {
         return undefined;
       }
       return {
@@ -357,6 +372,10 @@ function toUserInputQuestions(questions: ReadonlyArray<CodexToolUserInputQuestio
         header,
         question: prompt,
         options,
+        allowOther: question.isOther ?? options.length === 0,
+        isSecret: question.isSecret ?? false,
+        // The generated request_user_input question has no multi-select field.
+        // MCP elicitation array schemas are projected separately with multiSelect=true.
         multiSelect: false,
       };
     })
@@ -492,7 +511,17 @@ function mapToRuntimeEvents(
 ): ReadonlyArray<ProviderRuntimeEvent> {
   if (event.kind === "error") {
     if (!event.message) {
-      return [];
+      return [
+        {
+          ...runtimeEventBase(event, canonicalThreadId),
+          type: "runtime.raw",
+          payload: {
+            method: event.method,
+            kind: event.kind,
+            payload: event.payload ?? {},
+          },
+        },
+      ];
     }
     return [
       {
@@ -1333,7 +1362,17 @@ function mapToRuntimeEvents(
     ];
   }
 
-  return [];
+  return [
+    {
+      ...runtimeEventBase(event, canonicalThreadId),
+      type: "runtime.raw",
+      payload: {
+        method: event.method,
+        kind: event.kind,
+        payload: event.payload ?? {},
+      },
+    },
+  ];
 }
 
 /**
@@ -1365,6 +1404,30 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     options?.nativeEventLogger === undefined ? nativeEventLogger : undefined;
   const runtimeEventQueue = yield* Queue.unbounded<ProviderRuntimeEvent>();
   const sessions = new Map<ThreadId, CodexAdapterSessionContext>();
+  const connectionScope = yield* Scope.make("sequential");
+  yield* Effect.addFinalizer(() => Scope.close(connectionScope, Exit.void));
+  const sharedConnectionRef = yield* SynchronizedRef.make<CodexAppServerConnection | undefined>(
+    undefined,
+  );
+  const getSharedConnection = SynchronizedRef.modifyEffect(
+    sharedConnectionRef,
+    (existingConnection) => {
+      if (existingConnection) {
+        return Effect.succeed([existingConnection, existingConnection] as const);
+      }
+      const createConnection = options?.makeConnection ?? makeCodexAppServerConnection;
+      return createConnection({
+        binaryPath: codexConfig.binaryPath,
+        ...(codexConfig.homePath ? { homePath: codexConfig.homePath } : {}),
+        ...(options?.environment ? { environment: options.environment } : {}),
+        cwd: serverConfig.cwd,
+      }).pipe(
+        Effect.provideService(Scope.Scope, connectionScope),
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, childProcessSpawner),
+        Effect.map((connection) => [connection, connection] as const),
+      );
+    },
+  );
 
   const startSession: CodexAdapterShape["startSession"] = (input) =>
     Effect.scoped(
@@ -1404,16 +1467,10 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           ...(serviceTier ? { serviceTier } : {}),
           ...(mcpSession
             ? {
-                environment: {
-                  ...(options?.environment ?? process.env),
-                  T3_MCP_BEARER_TOKEN: mcpSession.authorizationHeader.replace(/^Bearer\s+/, ""),
+                mcpServer: {
+                  endpoint: mcpSession.endpoint,
+                  authorizationHeader: mcpSession.authorizationHeader,
                 },
-                appServerArgs: [
-                  "-c",
-                  `mcp_servers.t3-code.url=${mcpSession.endpoint}`,
-                  "-c",
-                  'mcp_servers.t3-code.bearer_token_env_var="T3_MCP_BEARER_TOKEN"',
-                ],
               }
             : {}),
         };
@@ -1423,7 +1480,18 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           sessionScopeTransferred ? Effect.void : Scope.close(sessionScope, Exit.void),
         );
         const createRuntime = options?.makeRuntime ?? makeCodexSessionRuntime;
-        const runtime = yield* createRuntime(runtimeInput).pipe(
+        const runtime = yield* (
+          options?.makeRuntime && !options.makeConnection
+            ? options.makeRuntime(runtimeInput)
+            : getSharedConnection.pipe(
+                Effect.flatMap((connection) =>
+                  createRuntime({
+                    ...runtimeInput,
+                    connection,
+                  }),
+                ),
+              )
+        ).pipe(
           Effect.provideService(Scope.Scope, sessionScope),
           Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, childProcessSpawner),
           Effect.provideService(Crypto.Crypto, crypto),
@@ -1537,6 +1605,9 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
         : undefined;
     return yield* session.runtime
       .sendTurn({
+        ...(input.clientUserMessageId !== undefined
+          ? { clientUserMessageId: input.clientUserMessageId }
+          : {}),
         ...(input.input !== undefined ? { input: input.input } : {}),
         ...(input.modelSelection?.instanceId === boundInstanceId
           ? { model: input.modelSelection.model }
@@ -1548,9 +1619,22 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           : {}),
         ...(serviceTier ? { serviceTier } : {}),
         ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
+        ...(input.structuredInputs !== undefined
+          ? { structuredInputs: input.structuredInputs }
+          : {}),
         ...(codexAttachments.length > 0 ? { attachments: codexAttachments } : {}),
       })
-      .pipe(Effect.mapError((cause) => mapCodexRuntimeError(input.threadId, "turn/start", cause)));
+      .pipe(
+        Effect.mapError((cause) =>
+          mapCodexRuntimeError(
+            input.threadId,
+            cause._tag === "CodexSessionRuntimeActiveTurnNotSteerableError"
+              ? "turn/steer"
+              : "turn/start",
+            cause,
+          ),
+        ),
+      );
   });
 
   const requireSession = Effect.fn("requireSession")(function* (threadId: ThreadId) {
@@ -1612,6 +1696,29 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       })),
     );
   };
+
+  const syncThreadLifecycle: NonNullable<CodexAdapterShape["syncThreadLifecycle"]> = (
+    threadId,
+    action,
+  ) =>
+    requireSession(threadId).pipe(
+      Effect.flatMap((session) => session.runtime.syncThreadLifecycle(action)),
+      Effect.mapError((cause) =>
+        cause._tag === "ProviderAdapterSessionNotFoundError"
+          ? cause
+          : mapCodexRuntimeError(threadId, `thread/${action.type}`, cause),
+      ),
+    );
+
+  const manageCodexMcp: NonNullable<CodexAdapterShape["manageCodexMcp"]> = (threadId, operation) =>
+    requireSession(threadId).pipe(
+      Effect.flatMap((session) => session.runtime.manageMcp(operation)),
+      Effect.mapError((cause) =>
+        cause._tag === "ProviderAdapterSessionNotFoundError"
+          ? cause
+          : mapCodexRuntimeError(threadId, `mcp/${operation.type}`, cause),
+      ),
+    );
 
   const respondToRequest: CodexAdapterShape["respondToRequest"] = (threadId, requestId, decision) =>
     requireSession(threadId).pipe(
@@ -1684,6 +1791,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
 
   yield* Effect.acquireRelease(Effect.void, () =>
     stopAll().pipe(
+      Effect.andThen(Effect.ignore(Scope.close(connectionScope, Exit.void))),
       Effect.andThen(Queue.shutdown(runtimeEventQueue)),
       Effect.andThen(managedNativeEventLogger?.close() ?? Effect.void),
       Effect.ignore,
@@ -1700,6 +1808,8 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     interruptTurn,
     readThread,
     rollbackThread,
+    syncThreadLifecycle,
+    manageCodexMcp,
     respondToRequest,
     respondToUserInput,
     stopSession,

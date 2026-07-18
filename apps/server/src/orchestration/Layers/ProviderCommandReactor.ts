@@ -2,6 +2,7 @@ import {
   type ChatAttachment,
   CommandId,
   EventId,
+  type MessageId,
   type ModelSelection,
   type OrchestrationEvent,
   ProviderDriverKind,
@@ -9,7 +10,9 @@ import {
   type OrchestrationSession,
   ThreadId,
   type ProviderSession,
+  type ProviderSendTurnInput,
   type RuntimeMode,
+  type ServerProviderSkill,
   type TurnId,
 } from "@t3tools/contracts";
 import { isTemporaryWorktreeBranch, WORKTREE_BRANCH_PREFIX } from "@t3tools/shared/git";
@@ -53,13 +56,68 @@ type ProviderIntentEvent = Extract<
       | "thread.turn-interrupt-requested"
       | "thread.approval-response-requested"
       | "thread.user-input-response-requested"
-      | "thread.session-stop-requested";
+      | "thread.session-stop-requested"
+      | "thread.compact-requested"
+      | "thread.review-start-requested";
   }
 >;
 
 function toNonEmptyProviderInput(value: string | undefined): string | undefined {
   const normalized = value?.trim();
   return normalized && normalized.length > 0 ? normalized : undefined;
+}
+
+function decodeComposerMentionPath(path: string): string {
+  try {
+    return decodeURI(path);
+  } catch (cause) {
+    if (cause instanceof URIError) {
+      return path;
+    }
+    throw cause;
+  }
+}
+
+export function buildProviderStructuredInputs(input: {
+  readonly text: string;
+  readonly skills: ReadonlyArray<ServerProviderSkill>;
+}): NonNullable<ProviderSendTurnInput["structuredInputs"]> {
+  const structuredInputs: Array<NonNullable<ProviderSendTurnInput["structuredInputs"]>[number]> =
+    [];
+  const seen = new Set<string>();
+  const enabledSkills = new Map(
+    input.skills.filter((skill) => skill.enabled).map((skill) => [skill.name, skill] as const),
+  );
+
+  for (const match of input.text.matchAll(/(?:^|[\s(])\$([A-Za-z0-9][A-Za-z0-9._-]*)/g)) {
+    const name = match[1];
+    const skill = name ? enabledSkills.get(name) : undefined;
+    if (!skill) continue;
+    const key = `skill:${skill.path}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    structuredInputs.push({ type: "skill", name: skill.name, path: skill.path });
+  }
+
+  for (const match of input.text.matchAll(/\[([^\]\n]+)\]\(([^)\n]+)\)/g)) {
+    const name = match[1]?.trim();
+    const encodedPath = match[2]?.trim();
+    if (
+      !name ||
+      !encodedPath ||
+      encodedPath.startsWith("#") ||
+      /^[A-Za-z][A-Za-z\d+.-]*:/.test(encodedPath)
+    ) {
+      continue;
+    }
+    const path = decodeComposerMentionPath(encodedPath);
+    const key = `mention:${path}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    structuredInputs.push({ type: "mention", name, path });
+  }
+
+  return structuredInputs;
 }
 
 function mapProviderSessionStatusToOrchestrationStatus(
@@ -578,15 +636,21 @@ const make = Effect.gen(function* () {
       return restartedSession.threadId;
     }
 
-    const startedSession = yield* startProviderSession(undefined);
+    const startedSession = yield* startProviderSession(
+      thread.providerResumeCursor !== undefined
+        ? { resumeCursor: thread.providerResumeCursor }
+        : undefined,
+    );
     yield* bindSessionToThread(startedSession);
     return startedSession.threadId;
   });
 
   const buildSendTurnRequestForThread = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
+    readonly clientUserMessageId: MessageId;
     readonly messageText: string;
     readonly attachments?: ReadonlyArray<ChatAttachment>;
+    readonly structuredInputs?: ProviderSendTurnInput["structuredInputs"];
     readonly modelSelection?: ModelSelection;
     readonly interactionMode?: "default" | "plan";
     readonly createdAt: string;
@@ -625,6 +689,15 @@ const make = Effect.gen(function* () {
               .sessionModelSwitch;
     const requestedModelSelection =
       input.modelSelection ?? threadModelSelections.get(input.threadId) ?? thread.modelSelection;
+    const structuredInputs =
+      input.structuredInputs ??
+      buildProviderStructuredInputs({
+        text: input.messageText,
+        skills:
+          (yield* providerRegistry.getProviders).find(
+            (provider) => provider.instanceId === requestedModelSelection.instanceId,
+          )?.skills ?? [],
+      });
     const modelForTurn =
       sessionModelSwitch === "unsupported" && input.modelSelection === undefined
         ? activeSession?.model !== undefined
@@ -637,10 +710,12 @@ const make = Effect.gen(function* () {
 
     return {
       threadId: input.threadId,
+      clientUserMessageId: input.clientUserMessageId,
       ...(normalizedInput ? { input: normalizedInput } : {}),
       ...(normalizedAttachments.length > 0 ? { attachments: normalizedAttachments } : {}),
       ...(modelForTurn !== undefined ? { modelSelection: modelForTurn } : {}),
       ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
+      ...(structuredInputs.length > 0 ? { structuredInputs } : {}),
     };
   });
 
@@ -839,8 +914,12 @@ const make = Effect.gen(function* () {
 
     const sendTurnRequest = yield* buildSendTurnRequestForThread({
       threadId: event.payload.threadId,
+      clientUserMessageId: event.payload.messageId,
       messageText: message.text,
       ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
+      ...(event.payload.structuredInputs !== undefined
+        ? { structuredInputs: event.payload.structuredInputs }
+        : {}),
       ...(event.payload.modelSelection !== undefined
         ? { modelSelection: event.payload.modelSelection }
         : {}),
@@ -1039,6 +1118,31 @@ const make = Effect.gen(function* () {
       case "thread.user-input-response-requested":
         yield* processUserInputResponseRequested(event);
         return;
+      case "thread.compact-requested":
+        yield* providerService.syncThreadLifecycle({
+          threadId: event.payload.threadId,
+          action: { type: "compact" },
+        });
+        return;
+      case "thread.review-start-requested":
+        yield* providerService.syncThreadLifecycle({
+          threadId: event.payload.threadId,
+          action: {
+            type: "review",
+            delivery: event.payload.delivery,
+            target:
+              event.payload.target.type === "commit"
+                ? {
+                    type: "commit",
+                    sha: event.payload.target.sha,
+                    ...(event.payload.target.title !== undefined
+                      ? { title: event.payload.target.title }
+                      : {}),
+                  }
+                : event.payload.target,
+          },
+        });
+        return;
       case "thread.session-stop-requested":
         yield* processSessionStopRequested(event);
         return;
@@ -1068,6 +1172,8 @@ const make = Effect.gen(function* () {
         event.type === "thread.turn-interrupt-requested" ||
         event.type === "thread.approval-response-requested" ||
         event.type === "thread.user-input-response-requested" ||
+        event.type === "thread.compact-requested" ||
+        event.type === "thread.review-start-requested" ||
         event.type === "thread.session-stop-requested"
       ) {
         return yield* worker.enqueue(event);

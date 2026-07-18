@@ -186,6 +186,10 @@
     "./httpReadiness": {
       "types": "./src/httpReadiness.ts",
       "import": "./src/httpReadiness.ts"
+    },
+    "./outboundPolicy": {
+      "types": "./src/outboundPolicy.ts",
+      "import": "./src/outboundPolicy.ts"
     }
   },
   "scripts": {

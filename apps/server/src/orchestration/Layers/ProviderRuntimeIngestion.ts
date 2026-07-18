@@ -384,6 +384,20 @@ function runtimeEventToActivities(
       ];
     }
 
+    case "runtime.raw":
+      return [
+        {
+          id: event.eventId,
+          createdAt: event.createdAt,
+          tone: "info",
+          kind: "runtime.raw",
+          summary: `Codex event: ${event.payload.method}`,
+          payload: event.payload,
+          turnId: toTurnId(event.turnId) ?? null,
+          ...maybeSequence,
+        },
+      ];
+
     case "turn.plan.updated": {
       return [
         {

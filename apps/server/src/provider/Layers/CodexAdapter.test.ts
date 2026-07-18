@@ -33,6 +33,7 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as CodexErrors from "effect-codex-app-server/errors";
+import * as EffectCodexSchema from "effect-codex-app-server/schema";
 
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
@@ -40,6 +41,7 @@ import { ProviderAdapterValidationError } from "../Errors.ts";
 import type { CodexAdapterShape } from "../Services/CodexAdapter.ts";
 import { ProviderSessionDirectory } from "../Services/ProviderSessionDirectory.ts";
 import {
+  type CodexAppServerConnection,
   type CodexSessionRuntimeOptions,
   type CodexSessionRuntimeSendTurnInput,
   type CodexSessionRuntimeShape,
@@ -57,6 +59,9 @@ const asThreadId = (value: string): ThreadId => ThreadId.make(value);
 const asTurnId = (value: string): TurnId => TurnId.make(value);
 const asEventId = (value: string): EventId => EventId.make(value);
 const asItemId = (value: string): ProviderItemId => ProviderItemId.make(value);
+const generatedRequestUserInputSupportsMultiSelect: "multiSelect" extends keyof EffectCodexSchema.ToolRequestUserInputParams__ToolRequestUserInputQuestion
+  ? true
+  : false = false;
 
 class FakeCodexRuntime implements CodexSessionRuntimeShape {
   private readonly eventQueue = Effect.runSync(Queue.unbounded<ProviderEvent>());
@@ -103,6 +108,11 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
       }),
   );
 
+  public readonly syncThreadLifecycleImpl = vi.fn(
+    (_action: Parameters<CodexSessionRuntimeShape["syncThreadLifecycle"]>[0]): Promise<void> =>
+      Promise.resolve(),
+  );
+
   public readonly respondToRequestImpl = vi.fn(
     (_requestId: ApprovalRequestId, _decision: ProviderApprovalDecision): Promise<void> =>
       Promise.resolve(undefined),
@@ -139,6 +149,14 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
 
   rollbackThread(numTurns: number) {
     return Effect.promise(() => this.rollbackThreadImpl(numTurns));
+  }
+
+  syncThreadLifecycle(action: Parameters<CodexSessionRuntimeShape["syncThreadLifecycle"]>[0]) {
+    return Effect.promise(() => this.syncThreadLifecycleImpl(action));
+  }
+
+  manageMcp(_operation: Parameters<CodexSessionRuntimeShape["manageMcp"]>[0]) {
+    return Effect.die("unused");
   }
 
   respondToRequest(requestId: ApprovalRequestId, decision: ProviderApprovalDecision) {
@@ -289,6 +307,50 @@ validationLayer("CodexAdapterLive validation", (it) => {
   );
 });
 
+it.effect("shares one Codex app-server connection across adapter thread sessions", () => {
+  const runtimeFactory = makeRuntimeFactory();
+  const sharedConnection = {
+    client: {},
+    exitCode: Effect.never,
+    collaborationModes: new Set(["default", "plan"]),
+  } as unknown as CodexAppServerConnection;
+  const makeConnection = vi.fn(() => Effect.succeed(sharedConnection));
+  const layer = Layer.effect(
+    CodexAdapter,
+    Effect.gen(function* () {
+      const codexConfig = decodeCodexSettings({});
+      return yield* makeCodexAdapter(codexConfig, {
+        makeConnection,
+        makeRuntime: runtimeFactory.factory,
+      });
+    }),
+  ).pipe(
+    Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
+    Layer.provideMerge(ServerSettingsService.layerTest()),
+    Layer.provideMerge(providerSessionDirectoryTestLayer),
+    Layer.provideMerge(NodeServices.layer),
+  );
+
+  return Effect.gen(function* () {
+    const adapter = yield* CodexAdapter;
+    yield* adapter.startSession({
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("shared-thread-1"),
+      runtimeMode: "full-access",
+    });
+    yield* adapter.startSession({
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("shared-thread-2"),
+      runtimeMode: "full-access",
+    });
+
+    NodeAssert.equal(makeConnection.mock.calls.length, 1);
+    NodeAssert.equal(runtimeFactory.factory.mock.calls.length, 2);
+    NodeAssert.strictEqual(runtimeFactory.factory.mock.calls[0]?.[0].connection, sharedConnection);
+    NodeAssert.strictEqual(runtimeFactory.factory.mock.calls[1]?.[0].connection, sharedConnection);
+  }).pipe(Effect.provide(layer));
+});
+
 const sessionRuntimeFactory = makeRuntimeFactory();
 const sessionErrorLayer = it.layer(
   Layer.effect(
@@ -347,6 +409,18 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
             { id: "serviceTier", value: "priority" },
           ]),
           attachments: [],
+          structuredInputs: [
+            {
+              type: "skill",
+              name: "frontend-design",
+              path: "/skills/frontend-design/SKILL.md",
+            },
+            {
+              type: "mention",
+              name: "App.tsx",
+              path: "apps/web/src/App.tsx",
+            },
+          ],
         }),
       );
 
@@ -355,6 +429,18 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
         model: "gpt-5.3-codex",
         effort: "high",
         serviceTier: "priority",
+        structuredInputs: [
+          {
+            type: "skill",
+            name: "frontend-design",
+            path: "/skills/frontend-design/SKILL.md",
+          },
+          {
+            type: "mention",
+            name: "App.tsx",
+            path: "apps/web/src/App.tsx",
+          },
+        ],
       });
     }),
   );
@@ -448,6 +534,54 @@ function startLifecycleRuntime() {
 }
 
 lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
+  it.effect("passes unknown Codex notifications through the raw extension channel", () =>
+    Effect.gen(function* () {
+      const { adapter, runtime } = yield* startLifecycleRuntime();
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+      yield* runtime.emit({
+        id: asEventId("evt-future"),
+        kind: "notification",
+        provider: ProviderDriverKind.make("codex"),
+        threadId: asThreadId("thread-1"),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        method: "future/codex/event",
+        payload: { feature: "new" },
+      });
+
+      const firstEvent = yield* Fiber.join(firstEventFiber);
+      NodeAssert.equal(firstEvent._tag, "Some");
+      if (firstEvent._tag !== "Some") return;
+      NodeAssert.equal(firstEvent.value.type, "runtime.raw");
+      NodeAssert.deepStrictEqual(firstEvent.value.payload, {
+        method: "future/codex/event",
+        kind: "notification",
+        payload: { feature: "new" },
+      });
+      NodeAssert.deepStrictEqual(firstEvent.value.raw, {
+        source: "codex.app-server.notification",
+        method: "future/codex/event",
+        payload: { feature: "new" },
+      });
+    }),
+  );
+
+  it.effect("routes native thread lifecycle actions to the active Codex runtime", () =>
+    Effect.gen(function* () {
+      const { adapter, runtime } = yield* startLifecycleRuntime();
+      runtime.syncThreadLifecycleImpl.mockClear();
+      NodeAssert.ok(adapter.syncThreadLifecycle);
+
+      yield* adapter.syncThreadLifecycle(asThreadId("thread-1"), {
+        type: "name",
+        name: "Renamed thread",
+      });
+
+      NodeAssert.deepStrictEqual(runtime.syncThreadLifecycleImpl.mock.calls, [
+        [{ type: "name", name: "Renamed thread" }],
+      ]);
+    }),
+  );
+
   it.effect("maps completed agent message items to canonical item.completed events", () =>
     Effect.gen(function* () {
       const { adapter, runtime } = yield* startLifecycleRuntime();
@@ -984,6 +1118,13 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
                     description: "Allow workspace writes only",
                   },
                 ],
+                isOther: true,
+              },
+              {
+                id: "api_key",
+                header: "API key",
+                question: "Enter the secret API key",
+                isSecret: true,
               },
             ],
           },
@@ -1008,9 +1149,14 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
         const events = Array.from(yield* Fiber.join(eventsFiber));
         NodeAssert.equal(events[0]?.type, "user-input.requested");
         if (events[0]?.type === "user-input.requested") {
+          NodeAssert.equal(generatedRequestUserInputSupportsMultiSelect, false);
           NodeAssert.equal(events[0].requestId, "req-user-input-1");
           NodeAssert.equal(events[0].payload.questions[0]?.id, "sandbox_mode");
           NodeAssert.equal(events[0].payload.questions[0]?.multiSelect, false);
+          NodeAssert.equal(events[0].payload.questions[0]?.allowOther, true);
+          NodeAssert.equal(events[0].payload.questions[1]?.id, "api_key");
+          NodeAssert.equal(events[0].payload.questions[1]?.isSecret, true);
+          NodeAssert.deepEqual(events[0].payload.questions[1]?.options, []);
         }
 
         NodeAssert.equal(events[1]?.type, "user-input.resolved");

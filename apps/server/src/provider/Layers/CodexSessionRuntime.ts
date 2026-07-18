@@ -1,5 +1,7 @@
 import {
   ApprovalRequestId,
+  type CodexMcpOperation,
+  type CodexMcpResult,
   DEFAULT_MODEL,
   EventId,
   ProviderDriverKind,
@@ -10,6 +12,7 @@ import {
   type ProviderInteractionMode,
   type ProviderRequestKind,
   type ProviderSession,
+  type ProviderSendTurnInput,
   type ProviderTurnStartResult,
   type ProviderUserInputAnswers,
   RuntimeMode,
@@ -39,6 +42,7 @@ import { buildCodexInitializeParams } from "./CodexProvider.ts";
 import { expandHomePath } from "../../pathExpansion.ts";
 import { buildCodexDeveloperInstructions } from "../CodexDeveloperInstructions.ts";
 const decodeV2TurnStartResponse = Schema.decodeUnknownEffect(EffectCodexSchema.V2TurnStartResponse);
+const decodeV2TurnSteerParams = Schema.decodeUnknownEffect(EffectCodexSchema.V2TurnSteerParams);
 
 const PROVIDER = ProviderDriverKind.make("codex");
 
@@ -71,6 +75,7 @@ const CodexUserInputAnswerObject = Schema.Struct({
 });
 const isCodexResumeCursorSchema = Schema.is(CodexResumeCursorSchema);
 const isCodexUserInputAnswerObject = Schema.is(CodexUserInputAnswerObject);
+const isCodexAppServerRequestError = Schema.is(CodexErrors.CodexAppServerRequestError);
 
 // TODO: Verify `packages/effect-codex-app-server/scripts/generate.ts` so the generated
 // `V2TurnStartParams` schema includes `collaborationMode` directly.
@@ -104,9 +109,36 @@ export interface CodexSessionRuntimeOptions {
   readonly serviceTier?: CodexServiceTier | undefined;
   readonly resumeCursor?: CodexResumeCursor;
   readonly appServerArgs?: ReadonlyArray<string>;
+  readonly mcpServer?: CodexThreadMcpServerConfig;
+  readonly connection?: CodexAppServerConnection;
+  readonly clientTools?: ReadonlyMap<string, CodexDynamicClientTool>;
+}
+
+export type CodexDynamicClientTool = (
+  input: EffectCodexSchema.DynamicToolCallParams,
+) => Effect.Effect<EffectCodexSchema.DynamicToolCallResponse, CodexErrors.CodexAppServerError>;
+
+export interface CodexThreadMcpServerConfig {
+  readonly endpoint: string;
+  readonly authorizationHeader: string;
+}
+
+export interface CodexAppServerConnectionOptions {
+  readonly binaryPath: string;
+  readonly homePath?: string;
+  readonly environment?: NodeJS.ProcessEnv;
+  readonly cwd: string;
+  readonly appServerArgs?: ReadonlyArray<string>;
+}
+
+export interface CodexAppServerConnection {
+  readonly client: CodexClient.CodexAppServerClient["Service"];
+  readonly exitCode: ChildProcessSpawner.ChildProcessHandle["exitCode"];
+  readonly collaborationModes: ReadonlySet<string>;
 }
 
 export interface CodexSessionRuntimeSendTurnInput {
+  readonly clientUserMessageId?: string;
   readonly input?: string;
   readonly attachments?: ReadonlyArray<{
     readonly type: "image";
@@ -116,6 +148,7 @@ export interface CodexSessionRuntimeSendTurnInput {
   readonly serviceTier?: CodexServiceTier | undefined;
   readonly effort?: EffectCodexSchema.V2TurnStartParams__ReasoningEffort | undefined;
   readonly interactionMode?: ProviderInteractionMode;
+  readonly structuredInputs?: ProviderSendTurnInput["structuredInputs"];
 }
 
 export interface CodexThreadTurnSnapshot {
@@ -139,6 +172,22 @@ export interface CodexSessionRuntimeShape {
   readonly rollbackThread: (
     numTurns: number,
   ) => Effect.Effect<CodexThreadSnapshot, CodexSessionRuntimeError>;
+  readonly syncThreadLifecycle: (
+    action:
+      | { readonly type: "archive" }
+      | { readonly type: "unarchive" }
+      | { readonly type: "delete" }
+      | { readonly type: "name"; readonly name: string }
+      | { readonly type: "compact" }
+      | {
+          readonly type: "review";
+          readonly delivery: "inline" | "detached";
+          readonly target: EffectCodexSchema.V2ReviewStartParams__ReviewTarget;
+        },
+  ) => Effect.Effect<void, CodexSessionRuntimeError>;
+  readonly manageMcp: (
+    operation: CodexMcpOperation,
+  ) => Effect.Effect<CodexMcpResult, CodexSessionRuntimeError>;
   readonly respondToRequest: (
     requestId: ApprovalRequestId,
     decision: ProviderApprovalDecision,
@@ -156,6 +205,8 @@ export type CodexSessionRuntimeError =
   | CodexSessionRuntimePendingApprovalNotFoundError
   | CodexSessionRuntimePendingUserInputNotFoundError
   | CodexSessionRuntimeInvalidUserInputAnswersError
+  | CodexSessionRuntimeActiveTurnNotSteerableError
+  | CodexSessionRuntimeCollaborationModeUnavailableError
   | CodexSessionRuntimeThreadIdMissingError;
 
 export class CodexSessionRuntimePendingApprovalNotFoundError extends Schema.TaggedErrorClass<CodexSessionRuntimePendingApprovalNotFoundError>()(
@@ -199,6 +250,33 @@ export class CodexSessionRuntimeThreadIdMissingError extends Schema.TaggedErrorC
 ) {
   override get message(): string {
     return `Codex session is missing a provider thread id for ${this.threadId}`;
+  }
+}
+
+export class CodexSessionRuntimeActiveTurnNotSteerableError extends Schema.TaggedErrorClass<CodexSessionRuntimeActiveTurnNotSteerableError>()(
+  "CodexSessionRuntimeActiveTurnNotSteerableError",
+  {
+    turnId: TurnId,
+    turnKind: Schema.optional(Schema.String),
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {
+  override get message(): string {
+    return this.turnKind
+      ? `The active Codex ${this.turnKind} turn cannot be steered.`
+      : "The active Codex turn cannot be steered.";
+  }
+}
+
+export class CodexSessionRuntimeCollaborationModeUnavailableError extends Schema.TaggedErrorClass<CodexSessionRuntimeCollaborationModeUnavailableError>()(
+  "CodexSessionRuntimeCollaborationModeUnavailableError",
+  {
+    mode: Schema.String,
+    availableModes: Schema.Array(Schema.String),
+  },
+) {
+  override get message(): string {
+    return `Codex collaboration mode '${this.mode}' is unavailable.`;
   }
 }
 
@@ -288,6 +366,7 @@ function buildThreadStartParams(input: {
   readonly runtimeMode: RuntimeMode;
   readonly model: string | undefined;
   readonly serviceTier: CodexServiceTier | undefined;
+  readonly mcpServer?: CodexThreadMcpServerConfig;
 }): EffectCodexSchema.V2ThreadStartParams {
   const config = runtimeModeToThreadConfig(input.runtimeMode);
   return {
@@ -296,6 +375,20 @@ function buildThreadStartParams(input: {
     sandbox: config.sandbox,
     ...(input.model ? { model: input.model } : {}),
     ...(input.serviceTier ? { serviceTier: input.serviceTier } : {}),
+    ...(input.mcpServer
+      ? {
+          config: {
+            mcp_servers: {
+              "t3-code": {
+                url: input.mcpServer.endpoint,
+                http_headers: {
+                  Authorization: input.mcpServer.authorizationHeader,
+                },
+              },
+            },
+          },
+        }
+      : {}),
   };
 }
 
@@ -354,6 +447,7 @@ export function buildTurnStartParams(input: {
   readonly serviceTier?: CodexServiceTier;
   readonly effort?: EffectCodexSchema.V2TurnStartParams__ReasoningEffort;
   readonly interactionMode?: ProviderInteractionMode;
+  readonly structuredInputs?: ProviderSendTurnInput["structuredInputs"];
 }): Effect.Effect<
   CodexTurnStartParamsWithCollaborationMode,
   CodexErrors.CodexAppServerProtocolParseError
@@ -367,6 +461,9 @@ export function buildTurnStartParams(input: {
   }
   for (const attachment of input.attachments ?? []) {
     turnInput.push(attachment);
+  }
+  for (const structuredInput of input.structuredInputs ?? []) {
+    turnInput.push(structuredInput);
   }
 
   const config = runtimeModeToThreadConfig(input.runtimeMode);
@@ -394,6 +491,94 @@ export function buildTurnStartParams(input: {
       ),
     ),
   );
+}
+
+export function buildTurnSteerParams(input: {
+  readonly threadId: string;
+  readonly expectedTurnId: string;
+  readonly clientUserMessageId: string;
+  readonly turnInput: ReadonlyArray<EffectCodexSchema.V2TurnSteerParams__UserInput>;
+}): Effect.Effect<
+  EffectCodexSchema.V2TurnSteerParams,
+  CodexErrors.CodexAppServerProtocolParseError
+> {
+  return decodeV2TurnSteerParams({
+    threadId: input.threadId,
+    expectedTurnId: input.expectedTurnId,
+    clientUserMessageId: input.clientUserMessageId,
+    input: input.turnInput,
+  }).pipe(
+    Effect.mapError((cause) =>
+      CodexErrors.CodexAppServerProtocolParseError.fromSchemaError(
+        "decode-request-payload",
+        cause,
+        { method: "turn/steer" },
+      ),
+    ),
+  );
+}
+
+export function isTurnSteerUnavailableError(error: unknown): boolean {
+  return (
+    isCodexAppServerRequestError(error) &&
+    (error.code === -32601 || error.errorMessage.toLowerCase().includes("method not found"))
+  );
+}
+
+function findActiveTurnNotSteerable(value: unknown): string | undefined {
+  if (typeof value !== "object" || value === null) {
+    return undefined;
+  }
+  if ("activeTurnNotSteerable" in value) {
+    const detail = value.activeTurnNotSteerable;
+    if (typeof detail === "object" && detail !== null && "turnKind" in detail) {
+      return typeof detail.turnKind === "string" ? detail.turnKind : "active";
+    }
+    return "active";
+  }
+  for (const nested of Object.values(value)) {
+    const turnKind = findActiveTurnNotSteerable(nested);
+    if (turnKind) return turnKind;
+  }
+  return undefined;
+}
+
+export function activeTurnNotSteerableKind(error: unknown): string | undefined {
+  if (!isCodexAppServerRequestError(error)) {
+    return undefined;
+  }
+
+  return (
+    findActiveTurnNotSteerable(error.data) ??
+    (error.errorMessage.toLowerCase().includes("active turn") &&
+    error.errorMessage.toLowerCase().includes("steer")
+      ? "active"
+      : undefined)
+  );
+}
+
+export function parseCollaborationModeNames(value: unknown): ReadonlySet<string> {
+  const modes = new Set<string>();
+  const visit = (entry: unknown): void => {
+    if (Array.isArray(entry)) {
+      for (const child of entry) visit(child);
+      return;
+    }
+    if (typeof entry !== "object" || entry === null) return;
+    for (const [key, child] of Object.entries(entry)) {
+      if (
+        (key === "mode" || key === "id" || key === "name") &&
+        typeof child === "string" &&
+        child.trim().length > 0
+      ) {
+        modes.add(child.trim());
+      } else {
+        visit(child);
+      }
+    }
+  };
+  visit(value);
+  return modes;
 }
 
 function classifyCodexStderrLine(rawLine: string): { readonly message: string } | null {
@@ -445,6 +630,7 @@ export const openCodexThread = (input: {
   readonly requestedModel: string | undefined;
   readonly serviceTier: CodexServiceTier | undefined;
   readonly resumeThreadId: string | undefined;
+  readonly mcpServer?: CodexThreadMcpServerConfig;
 }): Effect.Effect<CodexThreadOpenResponse, CodexErrors.CodexAppServerError> => {
   const resumeThreadId = input.resumeThreadId;
   const startParams = buildThreadStartParams({
@@ -452,6 +638,7 @@ export const openCodexThread = (input: {
     runtimeMode: input.runtimeMode,
     model: input.requestedModel,
     serviceTier: input.serviceTier,
+    ...(input.mcpServer ? { mcpServer: input.mcpServer } : {}),
   });
 
   if (resumeThreadId === undefined) {
@@ -522,6 +709,15 @@ function readNotificationThreadId(notification: CodexServerNotification): string
     default:
       return undefined;
   }
+}
+
+function readUnknownThreadId(params: unknown): string | undefined {
+  if (typeof params !== "object" || params === null) return undefined;
+  if ("threadId" in params && typeof params.threadId === "string") return params.threadId;
+  if ("conversationId" in params && typeof params.conversationId === "string") {
+    return params.conversationId;
+  }
+  return undefined;
 }
 
 function readRouteFields(notification: CodexServerNotification): {
@@ -660,6 +856,97 @@ function toCodexUserInputAnswers(
   ).pipe(Effect.map((entries) => Object.fromEntries(entries)));
 }
 
+function readMcpElicitationFieldLabel(
+  fieldId: string,
+  field: EffectCodexSchema.McpServerElicitationRequestParams__McpElicitationPrimitiveSchema,
+): string {
+  return "title" in field && typeof field.title === "string" && field.title.trim()
+    ? field.title
+    : fieldId;
+}
+
+function mcpElicitationOptions(
+  field: EffectCodexSchema.McpServerElicitationRequestParams__McpElicitationPrimitiveSchema,
+): ReadonlyArray<{ readonly label: string; readonly description: string }> {
+  if ("enum" in field && Array.isArray(field.enum)) {
+    return field.enum
+      .filter((entry): entry is string => typeof entry === "string")
+      .map((entry) => ({ label: entry, description: entry }));
+  }
+  if (
+    "items" in field &&
+    field.items &&
+    typeof field.items === "object" &&
+    "enum" in field.items &&
+    Array.isArray(field.items.enum)
+  ) {
+    return field.items.enum
+      .filter((entry): entry is string => typeof entry === "string")
+      .map((entry) => ({ label: entry, description: entry }));
+  }
+  if ("type" in field && field.type === "boolean") {
+    return [
+      { label: "Yes", description: "Yes" },
+      { label: "No", description: "No" },
+    ];
+  }
+  return [];
+}
+
+export function mcpElicitationQuestions(
+  payload: EffectCodexSchema.McpServerElicitationRequestParams,
+): ReadonlyArray<{
+  readonly id: string;
+  readonly header: string;
+  readonly question: string;
+  readonly options: ReadonlyArray<{ readonly label: string; readonly description: string }>;
+  readonly allowOther: boolean;
+  readonly isSecret: boolean;
+  readonly multiSelect: boolean;
+}> {
+  if (payload.mode === "url") {
+    return [
+      {
+        id: "action",
+        header: payload.serverName,
+        question: payload.message,
+        options: [
+          { label: "Open", description: payload.url },
+          { label: "Decline", description: "Do not continue." },
+        ],
+        allowOther: false,
+        isSecret: false,
+        multiSelect: false,
+      },
+    ];
+  }
+  return Object.entries(payload.requestedSchema.properties).map(([fieldId, field]) => ({
+    id: fieldId,
+    header: readMcpElicitationFieldLabel(fieldId, field),
+    question:
+      "description" in field && typeof field.description === "string"
+        ? field.description
+        : payload.message,
+    options: mcpElicitationOptions(field),
+    allowOther: mcpElicitationOptions(field).length === 0,
+    isSecret: false,
+    multiSelect: "type" in field && field.type === "array",
+  }));
+}
+
+function normalizeMcpElicitationContent(
+  answers: ProviderUserInputAnswers,
+): Readonly<Record<string, unknown>> {
+  return Object.fromEntries(
+    Object.entries(answers).map(([key, value]) => {
+      if (isCodexUserInputAnswerObject(value)) {
+        return [key, value.answers.length === 1 ? value.answers[0] : value.answers];
+      }
+      return [key, value];
+    }),
+  );
+}
+
 function currentProviderThreadId(session: ProviderSession): string | undefined {
   return readResumeCursorThreadId(session.resumeCursor);
 }
@@ -690,31 +977,25 @@ function parseThreadSnapshot(
   };
 }
 
-export const makeCodexSessionRuntime = (
-  options: CodexSessionRuntimeOptions,
+export const makeCodexAppServerConnection = (
+  options: CodexAppServerConnectionOptions,
 ): Effect.Effect<
-  CodexSessionRuntimeShape,
+  CodexAppServerConnection,
   CodexErrors.CodexAppServerError,
-  ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | Scope.Scope
+  ChildProcessSpawner.ChildProcessSpawner | Scope.Scope
 > =>
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const runtimeScope = yield* Scope.Scope;
-    const crypto = yield* Crypto.Crypto;
-    const events = yield* Queue.unbounded<ProviderEvent>();
-    const pendingApprovalsRef = yield* Ref.make(new Map<ApprovalRequestId, PendingApproval>());
-    const approvalCorrelationsRef = yield* Ref.make(new Map<string, ApprovalCorrelation>());
-    const pendingUserInputsRef = yield* Ref.make(new Map<ApprovalRequestId, PendingUserInput>());
-    const collabReceiverTurnsRef = yield* Ref.make(new Map<string, TurnId>());
-    const closedRef = yield* Ref.make(false);
-
-    // `~` is not shell-expanded when env vars are set via
-    // `child_process.spawn`; `expandHomePath` lets a configured
-    // `CODEX_HOME=~/.codex_work` reach codex as an absolute path.
+    const connectionScope = yield* Scope.Scope;
+    // `~` is not shell-expanded when env vars are set via child_process.spawn.
     const resolvedHomePath = options.homePath ? expandHomePath(options.homePath) : undefined;
     const env = {
       ...options.environment,
       ...(resolvedHomePath ? { CODEX_HOME: resolvedHomePath } : {}),
+      DO_NOT_TRACK: "1",
+      OTEL_SDK_DISABLED: "true",
+      CODEX_TELEMETRY_DISABLED: "1",
+      CODEX_ANALYTICS_ENABLED: "false",
     };
     const extendEnv = options.environment === undefined;
     const spawnCommand = yield* resolveSpawnCommand(
@@ -733,7 +1014,7 @@ export const makeCodexSessionRuntime = (
         }),
       )
       .pipe(
-        Effect.provideService(Scope.Scope, runtimeScope),
+        Effect.provideService(Scope.Scope, connectionScope),
         Effect.mapError(
           (cause) =>
             new CodexErrors.CodexAppServerSpawnError({
@@ -745,12 +1026,84 @@ export const makeCodexSessionRuntime = (
 
     const clientContext = yield* CodexClient.layerChildProcess(child).pipe(
       Layer.build,
-      Effect.provideService(Scope.Scope, runtimeScope),
+      Effect.provideService(Scope.Scope, connectionScope),
     );
     const client = yield* Effect.service(CodexClient.CodexAppServerClient).pipe(
       Effect.provide(clientContext),
     );
+
+    const stderrRemainderRef = yield* Ref.make("");
+    yield* child.stderr.pipe(
+      Stream.decodeText(),
+      Stream.runForEach((chunk) =>
+        Ref.modify(stderrRemainderRef, (current) => {
+          const combined = current + chunk;
+          const lines = combined.split("\n");
+          const remainder = lines.pop() ?? "";
+          return [lines.map((line) => line.replace(/\r$/, "")), remainder] as const;
+        }).pipe(
+          Effect.flatMap((lines) =>
+            Effect.forEach(
+              lines,
+              (line) => {
+                const classified = classifyCodexStderrLine(line);
+                return classified
+                  ? Effect.logWarning("Codex App Server stderr", {
+                      message: classified.message,
+                    })
+                  : Effect.void;
+              },
+              { discard: true },
+            ),
+          ),
+        ),
+      ),
+      Effect.forkIn(connectionScope),
+    );
+
+    yield* client.request("initialize", buildCodexInitializeParams());
+    yield* client.notify("initialized", undefined);
+    const collaborationModes = yield* client.raw.request("collaborationMode/list", {}).pipe(
+      Effect.map(parseCollaborationModeNames),
+      Effect.catchIf(isTurnSteerUnavailableError, () =>
+        Effect.succeed(new Set<string>(["default", "plan"])),
+      ),
+    );
+    return {
+      client,
+      exitCode: child.exitCode,
+      collaborationModes,
+    };
+  });
+
+export const makeCodexSessionRuntime = (
+  options: CodexSessionRuntimeOptions,
+): Effect.Effect<
+  CodexSessionRuntimeShape,
+  CodexErrors.CodexAppServerError,
+  ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | Scope.Scope
+> =>
+  Effect.gen(function* () {
+    const runtimeScope = yield* Scope.Scope;
+    const crypto = yield* Crypto.Crypto;
+    const events = yield* Queue.unbounded<ProviderEvent>();
+    const pendingApprovalsRef = yield* Ref.make(new Map<ApprovalRequestId, PendingApproval>());
+    const approvalCorrelationsRef = yield* Ref.make(new Map<string, ApprovalCorrelation>());
+    const pendingUserInputsRef = yield* Ref.make(new Map<ApprovalRequestId, PendingUserInput>());
+    const collabReceiverTurnsRef = yield* Ref.make(new Map<string, TurnId>());
+    const closedRef = yield* Ref.make(false);
+    const connection =
+      options.connection ??
+      (yield* makeCodexAppServerConnection({
+        binaryPath: options.binaryPath,
+        ...(options.homePath ? { homePath: options.homePath } : {}),
+        ...(options.environment ? { environment: options.environment } : {}),
+        cwd: options.cwd,
+        ...(options.appServerArgs ? { appServerArgs: options.appServerArgs } : {}),
+      }));
+    const client = connection.client;
     const serverNotifications = yield* Queue.unbounded<CodexServerNotification>();
+    let routedProviderThreadId = readResumeCursorThreadId(options.resumeCursor);
     const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
     const randomUUIDv4 = (purpose: CodexErrors.CodexAppServerIdentifierPurpose) =>
       crypto.randomUUIDv4.pipe(
@@ -827,8 +1180,18 @@ export const makeCodexSessionRuntime = (
         const payload = notification.params;
         const route = readRouteFields(notification);
         const collabReceiverTurns = yield* Ref.get(collabReceiverTurnsRef);
+        const notificationThreadId = readNotificationThreadId(notification);
+        if (
+          notificationThreadId &&
+          ((!routedProviderThreadId && !collabReceiverTurns.has(notificationThreadId)) ||
+            (routedProviderThreadId &&
+              notificationThreadId !== routedProviderThreadId &&
+              !collabReceiverTurns.has(notificationThreadId)))
+        ) {
+          return;
+        }
         const childParentTurnId = (() => {
-          const providerConversationId = readNotificationThreadId(notification);
+          const providerConversationId = notificationThreadId;
           return providerConversationId
             ? collabReceiverTurns.get(providerConversationId)
             : undefined;
@@ -882,245 +1245,483 @@ export const makeCodexSessionRuntime = (
         });
       });
 
-    const currentSessionProviderThreadId = Effect.map(Ref.get(sessionRef), currentProviderThreadId);
+    const registerSessionNotification = <M extends CodexRpc.ServerNotificationMethod>(
+      method: M,
+      accepts: (payload: CodexRpc.ServerNotificationParamsByMethod[M]) => boolean,
+      handler: (
+        payload: CodexRpc.ServerNotificationParamsByMethod[M],
+      ) => Effect.Effect<void, CodexErrors.CodexAppServerError>,
+    ) =>
+      client
+        .registerServerNotification(method, accepts, handler)
+        .pipe(Effect.flatMap((unregister) => Effect.addFinalizer(() => unregister)));
 
-    yield* client.handleServerNotification("thread/started", (payload) =>
-      currentSessionProviderThreadId.pipe(
-        Effect.flatMap((providerThreadId) => {
-          if (providerThreadId && payload.thread.id !== providerThreadId) {
-            return Effect.void;
-          }
-          return updateSession(sessionRef, {
-            resumeCursor: { threadId: payload.thread.id },
-          });
+    yield* registerSessionNotification(
+      "thread/started",
+      (payload) => payload.thread.id === routedProviderThreadId,
+      (payload) =>
+        updateSession(sessionRef, {
+          resumeCursor: { threadId: payload.thread.id },
         }),
-      ),
     );
 
-    yield* client.handleServerNotification("turn/started", (payload) =>
-      currentSessionProviderThreadId.pipe(
-        Effect.flatMap((providerThreadId) => {
-          if (providerThreadId && payload.threadId !== providerThreadId) {
-            return Effect.void;
-          }
-          return updateSession(sessionRef, {
-            status: "running",
-            activeTurnId: TurnId.make(payload.turn.id),
-          });
+    yield* registerSessionNotification(
+      "turn/started",
+      (payload) => payload.threadId === routedProviderThreadId,
+      (payload) =>
+        updateSession(sessionRef, {
+          status: "running",
+          activeTurnId: TurnId.make(payload.turn.id),
         }),
-      ),
     );
 
-    yield* client.handleServerNotification("turn/completed", (payload) =>
-      currentSessionProviderThreadId.pipe(
-        Effect.flatMap((providerThreadId) => {
-          if (providerThreadId && payload.threadId !== providerThreadId) {
-            return Effect.void;
-          }
-          const lastError =
-            payload.turn.status === "failed" && "error" in payload.turn && payload.turn.error
-              ? payload.turn.error.message
-              : undefined;
-          return updateSession(sessionRef, {
-            status: payload.turn.status === "failed" ? "error" : "ready",
-            activeTurnId: undefined,
-            ...(lastError ? { lastError } : {}),
-          });
-        }),
-      ),
-    );
-
-    yield* client.handleServerNotification("error", (payload) =>
-      currentSessionProviderThreadId.pipe(
-        Effect.flatMap((providerThreadId) => {
-          const payloadThreadId = payload.threadId;
-          if (providerThreadId && payloadThreadId && payloadThreadId !== providerThreadId) {
-            return Effect.void;
-          }
-          const errorMessage = payload.error.message;
-          const willRetry = payload.willRetry;
-          return updateSession(sessionRef, {
-            status: willRetry ? "running" : "error",
-            ...(errorMessage ? { lastError: errorMessage } : {}),
-          });
-        }),
-      ),
-    );
-
-    yield* client.handleServerRequest("item/commandExecution/requestApproval", (payload) =>
-      Effect.gen(function* () {
-        const requestId = ApprovalRequestId.make(yield* randomUUIDv4("command-approval-request"));
-        const turnId = TurnId.make(payload.turnId);
-        const itemId = ProviderItemId.make(payload.itemId);
-        const decision = yield* Deferred.make<ProviderApprovalDecision>();
-
-        yield* Ref.update(pendingApprovalsRef, (current) => {
-          const next = new Map(current);
-          next.set(requestId, {
-            requestId,
-            jsonRpcId: payload.approvalId ?? payload.itemId,
-            requestKind: "command",
-            turnId,
-            itemId,
-            decision,
-          });
-          return next;
+    yield* registerSessionNotification(
+      "turn/completed",
+      (payload) => payload.threadId === routedProviderThreadId,
+      (payload) => {
+        const lastError =
+          payload.turn.status === "failed" && "error" in payload.turn && payload.turn.error
+            ? payload.turn.error.message
+            : undefined;
+        return updateSession(sessionRef, {
+          status: payload.turn.status === "failed" ? "error" : "ready",
+          activeTurnId: undefined,
+          ...(lastError ? { lastError } : {}),
         });
-        yield* Ref.update(approvalCorrelationsRef, (current) => {
-          const next = new Map(current);
-          next.set(payload.approvalId ?? payload.itemId, {
-            requestId,
-            requestKind: "command",
-            turnId,
-            itemId,
-          });
-          return next;
-        });
+      },
+    );
 
-        yield* emitEvent({
-          kind: "request",
-          threadId: options.threadId,
-          method: "item/commandExecution/requestApproval",
-          requestId,
-          requestKind: "command",
-          ...(turnId ? { turnId } : {}),
-          ...(itemId ? { itemId } : {}),
-          payload,
+    yield* registerSessionNotification(
+      "error",
+      (payload) => !payload.threadId || payload.threadId === routedProviderThreadId,
+      (payload) => {
+        const errorMessage = payload.error.message;
+        const willRetry = payload.willRetry;
+        return updateSession(sessionRef, {
+          status: willRetry ? "running" : "error",
+          ...(errorMessage ? { lastError: errorMessage } : {}),
         });
+      },
+    );
 
-        const resolved = yield* Deferred.await(decision).pipe(
-          Effect.ensuring(
-            Ref.update(pendingApprovalsRef, (current) => {
+    yield* client
+      .registerServerRequest(
+        "item/commandExecution/requestApproval",
+        (payload) => payload.threadId === routedProviderThreadId,
+        (payload) =>
+          Effect.gen(function* () {
+            const requestId = ApprovalRequestId.make(
+              yield* randomUUIDv4("command-approval-request"),
+            );
+            const turnId = TurnId.make(payload.turnId);
+            const itemId = ProviderItemId.make(payload.itemId);
+            const decision = yield* Deferred.make<ProviderApprovalDecision>();
+
+            yield* Ref.update(pendingApprovalsRef, (current) => {
               const next = new Map(current);
-              next.delete(requestId);
+              next.set(requestId, {
+                requestId,
+                jsonRpcId: payload.approvalId ?? payload.itemId,
+                requestKind: "command",
+                turnId,
+                itemId,
+                decision,
+              });
               return next;
-            }),
-          ),
-        );
-        return {
-          decision: resolved,
-        } satisfies EffectCodexSchema.CommandExecutionRequestApprovalResponse;
-      }),
-    );
-
-    yield* client.handleServerRequest("item/fileChange/requestApproval", (payload) =>
-      Effect.gen(function* () {
-        const requestId = ApprovalRequestId.make(
-          yield* randomUUIDv4("file-change-approval-request"),
-        );
-        const turnId = TurnId.make(payload.turnId);
-        const itemId = ProviderItemId.make(payload.itemId);
-        const decision = yield* Deferred.make<ProviderApprovalDecision>();
-
-        yield* Ref.update(pendingApprovalsRef, (current) => {
-          const next = new Map(current);
-          next.set(requestId, {
-            requestId,
-            jsonRpcId: payload.itemId,
-            requestKind: "file-change",
-            turnId,
-            itemId,
-            decision,
-          });
-          return next;
-        });
-        yield* Ref.update(approvalCorrelationsRef, (current) => {
-          const next = new Map(current);
-          next.set(payload.itemId, {
-            requestId,
-            requestKind: "file-change",
-            turnId,
-            itemId,
-          });
-          return next;
-        });
-
-        yield* emitEvent({
-          kind: "request",
-          threadId: options.threadId,
-          method: "item/fileChange/requestApproval",
-          requestId,
-          requestKind: "file-change",
-          ...(turnId ? { turnId } : {}),
-          ...(itemId ? { itemId } : {}),
-          payload,
-        });
-
-        const resolved = yield* Deferred.await(decision).pipe(
-          Effect.ensuring(
-            Ref.update(pendingApprovalsRef, (current) => {
+            });
+            yield* Ref.update(approvalCorrelationsRef, (current) => {
               const next = new Map(current);
-              next.delete(requestId);
+              next.set(payload.approvalId ?? payload.itemId, {
+                requestId,
+                requestKind: "command",
+                turnId,
+                itemId,
+              });
               return next;
-            }),
-          ),
-        );
-        return {
-          decision: resolved,
-        } satisfies EffectCodexSchema.FileChangeRequestApprovalResponse;
-      }),
-    );
+            });
 
-    yield* client.handleServerRequest("item/tool/requestUserInput", (payload) =>
-      Effect.gen(function* () {
-        const requestId = ApprovalRequestId.make(yield* randomUUIDv4("user-input-request"));
-        const turnId = TurnId.make(payload.turnId);
-        const itemId = ProviderItemId.make(payload.itemId);
-        const answers = yield* Deferred.make<ProviderUserInputAnswers>();
+            yield* emitEvent({
+              kind: "request",
+              threadId: options.threadId,
+              method: "item/commandExecution/requestApproval",
+              requestId,
+              requestKind: "command",
+              ...(turnId ? { turnId } : {}),
+              ...(itemId ? { itemId } : {}),
+              payload,
+            });
 
-        yield* Ref.update(pendingUserInputsRef, (current) => {
-          const next = new Map(current);
-          next.set(requestId, {
-            requestId,
-            turnId,
-            itemId,
-            answers,
-          });
-          return next;
-        });
+            const resolved = yield* Deferred.await(decision).pipe(
+              Effect.ensuring(
+                Ref.update(pendingApprovalsRef, (current) => {
+                  const next = new Map(current);
+                  next.delete(requestId);
+                  return next;
+                }),
+              ),
+            );
+            return {
+              decision: resolved,
+            } satisfies EffectCodexSchema.CommandExecutionRequestApprovalResponse;
+          }),
+      )
+      .pipe(Effect.flatMap((unregister) => Effect.addFinalizer(() => unregister)));
 
-        yield* emitEvent({
-          kind: "request",
-          threadId: options.threadId,
-          method: "item/tool/requestUserInput",
-          requestId,
-          ...(turnId ? { turnId } : {}),
-          ...(itemId ? { itemId } : {}),
-          payload,
-        });
+    yield* client
+      .registerServerRequest(
+        "item/fileChange/requestApproval",
+        (payload) => payload.threadId === routedProviderThreadId,
+        (payload) =>
+          Effect.gen(function* () {
+            const requestId = ApprovalRequestId.make(
+              yield* randomUUIDv4("file-change-approval-request"),
+            );
+            const turnId = TurnId.make(payload.turnId);
+            const itemId = ProviderItemId.make(payload.itemId);
+            const decision = yield* Deferred.make<ProviderApprovalDecision>();
 
-        const resolvedAnswers = yield* Deferred.await(answers).pipe(
-          Effect.ensuring(
-            Ref.update(pendingUserInputsRef, (current) => {
+            yield* Ref.update(pendingApprovalsRef, (current) => {
               const next = new Map(current);
-              next.delete(requestId);
+              next.set(requestId, {
+                requestId,
+                jsonRpcId: payload.itemId,
+                requestKind: "file-change",
+                turnId,
+                itemId,
+                decision,
+              });
               return next;
-            }),
-          ),
-        );
+            });
+            yield* Ref.update(approvalCorrelationsRef, (current) => {
+              const next = new Map(current);
+              next.set(payload.itemId, {
+                requestId,
+                requestKind: "file-change",
+                turnId,
+                itemId,
+              });
+              return next;
+            });
 
-        return {
-          answers: yield* toCodexUserInputAnswers(resolvedAnswers).pipe(
-            Effect.mapError((error) =>
-              CodexErrors.CodexAppServerRequestError.invalidParams(error.message, {
-                questionId: error.questionId,
-              }),
-            ),
-          ),
-        } satisfies EffectCodexSchema.ToolRequestUserInputResponse;
-      }),
-    );
+            yield* emitEvent({
+              kind: "request",
+              threadId: options.threadId,
+              method: "item/fileChange/requestApproval",
+              requestId,
+              requestKind: "file-change",
+              ...(turnId ? { turnId } : {}),
+              ...(itemId ? { itemId } : {}),
+              payload,
+            });
 
-    yield* client.handleUnknownServerRequest((method) =>
-      Effect.fail(CodexErrors.CodexAppServerRequestError.methodNotFound(method)),
-    );
+            const resolved = yield* Deferred.await(decision).pipe(
+              Effect.ensuring(
+                Ref.update(pendingApprovalsRef, (current) => {
+                  const next = new Map(current);
+                  next.delete(requestId);
+                  return next;
+                }),
+              ),
+            );
+            return {
+              decision: resolved,
+            } satisfies EffectCodexSchema.FileChangeRequestApprovalResponse;
+          }),
+      )
+      .pipe(Effect.flatMap((unregister) => Effect.addFinalizer(() => unregister)));
+
+    yield* client
+      .registerServerRequest(
+        "item/permissions/requestApproval",
+        (payload) => payload.threadId === routedProviderThreadId,
+        (payload) =>
+          Effect.gen(function* () {
+            const requestId = ApprovalRequestId.make(
+              yield* randomUUIDv4("command-approval-request"),
+            );
+            const turnId = TurnId.make(payload.turnId);
+            const itemId = ProviderItemId.make(payload.itemId);
+            const decision = yield* Deferred.make<ProviderApprovalDecision>();
+
+            yield* Ref.update(pendingApprovalsRef, (current) => {
+              const next = new Map(current);
+              next.set(requestId, {
+                requestId,
+                jsonRpcId: payload.itemId,
+                requestKind: "permissions",
+                turnId,
+                itemId,
+                decision,
+              });
+              return next;
+            });
+            yield* Ref.update(approvalCorrelationsRef, (current) => {
+              const next = new Map(current);
+              next.set(payload.itemId, {
+                requestId,
+                requestKind: "permissions",
+                turnId,
+                itemId,
+              });
+              return next;
+            });
+            yield* emitEvent({
+              kind: "request",
+              threadId: options.threadId,
+              method: "item/permissions/requestApproval",
+              requestId,
+              requestKind: "permissions",
+              turnId,
+              itemId,
+              payload,
+            });
+
+            const resolved = yield* Deferred.await(decision).pipe(
+              Effect.ensuring(
+                Ref.update(pendingApprovalsRef, (current) => {
+                  const next = new Map(current);
+                  next.delete(requestId);
+                  return next;
+                }),
+              ),
+            );
+            return {
+              permissions:
+                resolved === "accept" || resolved === "acceptForSession" ? payload.permissions : {},
+              scope: resolved === "acceptForSession" ? "session" : "turn",
+            } satisfies EffectCodexSchema.PermissionsRequestApprovalResponse;
+          }),
+      )
+      .pipe(Effect.flatMap((unregister) => Effect.addFinalizer(() => unregister)));
+
+    yield* client
+      .registerServerRequest(
+        "item/tool/requestUserInput",
+        (payload) => payload.threadId === routedProviderThreadId,
+        (payload) =>
+          Effect.gen(function* () {
+            const requestId = ApprovalRequestId.make(yield* randomUUIDv4("user-input-request"));
+            const turnId = TurnId.make(payload.turnId);
+            const itemId = ProviderItemId.make(payload.itemId);
+            const answers = yield* Deferred.make<ProviderUserInputAnswers>();
+
+            yield* Ref.update(pendingUserInputsRef, (current) => {
+              const next = new Map(current);
+              next.set(requestId, {
+                requestId,
+                turnId,
+                itemId,
+                answers,
+              });
+              return next;
+            });
+
+            yield* emitEvent({
+              kind: "request",
+              threadId: options.threadId,
+              method: "item/tool/requestUserInput",
+              requestId,
+              ...(turnId ? { turnId } : {}),
+              ...(itemId ? { itemId } : {}),
+              payload,
+            });
+
+            const resolvedAnswers = yield* Deferred.await(answers).pipe(
+              Effect.ensuring(
+                Ref.update(pendingUserInputsRef, (current) => {
+                  const next = new Map(current);
+                  next.delete(requestId);
+                  return next;
+                }),
+              ),
+            );
+
+            return {
+              answers: yield* toCodexUserInputAnswers(resolvedAnswers).pipe(
+                Effect.mapError((error) =>
+                  CodexErrors.CodexAppServerRequestError.invalidParams(error.message, {
+                    questionId: error.questionId,
+                  }),
+                ),
+              ),
+            } satisfies EffectCodexSchema.ToolRequestUserInputResponse;
+          }),
+      )
+      .pipe(Effect.flatMap((unregister) => Effect.addFinalizer(() => unregister)));
+
+    yield* client
+      .registerServerRequest(
+        "mcpServer/elicitation/request",
+        (payload) => payload.threadId === routedProviderThreadId,
+        (payload) =>
+          Effect.gen(function* () {
+            const requestId = ApprovalRequestId.make(yield* randomUUIDv4("user-input-request"));
+            const turnId = payload.turnId ? TurnId.make(payload.turnId) : undefined;
+            const answers = yield* Deferred.make<ProviderUserInputAnswers>();
+
+            yield* Ref.update(pendingUserInputsRef, (current) => {
+              const next = new Map(current);
+              next.set(requestId, {
+                requestId,
+                turnId,
+                itemId: undefined,
+                answers,
+              });
+              return next;
+            });
+            yield* emitEvent({
+              kind: "request",
+              threadId: options.threadId,
+              method: "mcpServer/elicitation/request",
+              requestId,
+              ...(turnId ? { turnId } : {}),
+              payload,
+            });
+            yield* emitEvent({
+              kind: "request",
+              threadId: options.threadId,
+              method: "item/tool/requestUserInput",
+              requestId,
+              ...(turnId ? { turnId } : {}),
+              payload: {
+                itemId: `mcp-elicitation:${requestId}`,
+                threadId: routedProviderThreadId ?? options.threadId,
+                turnId: payload.turnId ?? `mcp-elicitation:${requestId}`,
+                questions: mcpElicitationQuestions(payload),
+                mcpElicitation: payload,
+              },
+            });
+
+            const resolvedAnswers = yield* Deferred.await(answers).pipe(
+              Effect.ensuring(
+                Ref.update(pendingUserInputsRef, (current) => {
+                  const next = new Map(current);
+                  next.delete(requestId);
+                  return next;
+                }),
+              ),
+            );
+            const content = normalizeMcpElicitationContent(resolvedAnswers);
+            const urlAction =
+              payload.mode === "url" && typeof content.action === "string"
+                ? content.action.toLowerCase()
+                : undefined;
+            const action =
+              Object.keys(content).length === 0
+                ? ("cancel" as const)
+                : urlAction === "decline"
+                  ? ("decline" as const)
+                  : ("accept" as const);
+            yield* emitEvent({
+              kind: "notification",
+              threadId: options.threadId,
+              method: "mcpServer/elicitation/resolved",
+              requestId,
+              ...(turnId ? { turnId } : {}),
+              payload: { action, ...(action === "accept" ? { content } : {}) },
+            });
+            return {
+              action,
+              ...(action === "accept" ? { content } : {}),
+            } satisfies EffectCodexSchema.McpServerElicitationRequestResponse;
+          }),
+      )
+      .pipe(Effect.flatMap((unregister) => Effect.addFinalizer(() => unregister)));
+
+    yield* client
+      .registerServerRequest(
+        "item/tool/call",
+        (payload) => payload.threadId === routedProviderThreadId,
+        (payload) =>
+          Effect.gen(function* () {
+            const requestId = ApprovalRequestId.make(yield* randomUUIDv4("user-input-request"));
+            const turnId = TurnId.make(payload.turnId);
+            yield* emitEvent({
+              kind: "request",
+              threadId: options.threadId,
+              method: "item/tool/call",
+              requestId,
+              turnId,
+              payload,
+            });
+            const key = payload.namespace ? `${payload.namespace}/${payload.tool}` : payload.tool;
+            const handler = options.clientTools?.get(key) ?? options.clientTools?.get(payload.tool);
+            const response = handler
+              ? yield* handler(payload)
+              : {
+                  success: false,
+                  contentItems: [
+                    {
+                      type: "inputText" as const,
+                      text: `No trusted client tool is registered for '${key}'.`,
+                    },
+                  ],
+                };
+            yield* emitEvent({
+              kind: "notification",
+              threadId: options.threadId,
+              method: "item/tool/call/resolved",
+              requestId,
+              turnId,
+              payload: response,
+            });
+            return response;
+          }),
+      )
+      .pipe(Effect.flatMap((unregister) => Effect.addFinalizer(() => unregister)));
+
+    yield* client
+      .registerUnknownServerRequest(
+        (_method, params) => {
+          const requestThreadId = readUnknownThreadId(params);
+          return requestThreadId === undefined || requestThreadId === routedProviderThreadId;
+        },
+        (method, params) =>
+          Effect.gen(function* () {
+            const requestId = ApprovalRequestId.make(yield* randomUUIDv4("user-input-request"));
+            yield* emitEvent({
+              kind: "request",
+              threadId: options.threadId,
+              method,
+              requestId,
+              message: `Unsupported Codex callback: ${method}`,
+              ...(params !== undefined ? { payload: params } : {}),
+            });
+            return yield* CodexErrors.CodexAppServerRequestError.methodNotFound(method);
+          }),
+      )
+      .pipe(Effect.flatMap((unregister) => Effect.addFinalizer(() => unregister)));
+
+    yield* client
+      .registerUnknownServerNotification(
+        (_method, params) => {
+          const notificationThreadId = readUnknownThreadId(params);
+          return (
+            notificationThreadId === undefined || notificationThreadId === routedProviderThreadId
+          );
+        },
+        (method, params) =>
+          emitEvent({
+            kind: "notification",
+            threadId: options.threadId,
+            method,
+            message: `Unrecognized Codex event: ${method}`,
+            ...(params !== undefined ? { payload: params } : {}),
+          }),
+      )
+      .pipe(Effect.flatMap((unregister) => Effect.addFinalizer(() => unregister)));
 
     const registerServerNotification = <M extends CodexRpc.ServerNotificationMethod>(method: M) =>
-      client.handleServerNotification(method, (params) =>
-        Queue.offer(serverNotifications, makeCodexServerNotification(method, params)).pipe(
-          Effect.asVoid,
-        ),
-      );
+      client
+        .registerServerNotification(
+          method,
+          () => true,
+          (params) =>
+            Queue.offer(serverNotifications, makeCodexServerNotification(method, params)).pipe(
+              Effect.asVoid,
+            ),
+        )
+        .pipe(Effect.flatMap((unregister) => Effect.addFinalizer(() => unregister)));
 
     yield* Effect.forEach(
       Object.values(
@@ -1135,40 +1736,7 @@ export const makeCodexSessionRuntime = (
       Effect.forkIn(runtimeScope),
     );
 
-    const stderrRemainderRef = yield* Ref.make("");
-    yield* child.stderr.pipe(
-      Stream.decodeText(),
-      Stream.runForEach((chunk) =>
-        Ref.modify(stderrRemainderRef, (current) => {
-          const combined = current + chunk;
-          const lines = combined.split("\n");
-          const remainder = lines.pop() ?? "";
-          return [lines.map((line) => line.replace(/\r$/, "")), remainder] as const;
-        }).pipe(
-          Effect.flatMap((lines) =>
-            Effect.forEach(
-              lines,
-              (line) => {
-                const classified = classifyCodexStderrLine(line);
-                if (!classified) {
-                  return Effect.void;
-                }
-                return emitEvent({
-                  kind: "notification",
-                  threadId: options.threadId,
-                  method: "process/stderr",
-                  message: classified.message,
-                });
-              },
-              { discard: true },
-            ),
-          ),
-        ),
-      ),
-      Effect.forkIn(runtimeScope),
-    );
-
-    yield* child.exitCode.pipe(
+    yield* connection.exitCode.pipe(
       Effect.flatMap((exitCode) =>
         Ref.get(closedRef).pipe(
           Effect.flatMap((closed) => {
@@ -1196,9 +1764,7 @@ export const makeCodexSessionRuntime = (
     );
 
     const start = Effect.fn("CodexSessionRuntime.start")(function* () {
-      yield* emitSessionEvent("session/connecting", "Starting Codex App Server session.");
-      yield* client.request("initialize", buildCodexInitializeParams());
-      yield* client.notify("initialized", undefined);
+      yield* emitSessionEvent("session/connecting", "Opening Codex App Server thread.");
 
       const requestedModel = normalizeCodexModelSlug(options.model);
 
@@ -1210,9 +1776,11 @@ export const makeCodexSessionRuntime = (
         requestedModel,
         serviceTier: options.serviceTier,
         resumeThreadId: readResumeCursorThreadId(options.resumeCursor),
+        ...(options.mcpServer ? { mcpServer: options.mcpServer } : {}),
       });
 
       const providerThreadId = opened.thread.id;
+      routedProviderThreadId = providerThreadId;
       const session = {
         ...(yield* Ref.get(sessionRef)),
         status: "ready",
@@ -1222,7 +1790,7 @@ export const makeCodexSessionRuntime = (
         updatedAt: yield* nowIso,
       } satisfies ProviderSession;
       yield* Ref.set(sessionRef, session);
-      yield* emitSessionEvent("session/ready", "Codex App Server session ready.");
+      yield* emitSessionEvent("session/ready", "Codex App Server thread ready.");
       return session;
     });
 
@@ -1263,7 +1831,13 @@ export const makeCodexSessionRuntime = (
       sendTurn: (input) =>
         Effect.gen(function* () {
           const providerThreadId = yield* readProviderThreadId;
-          if (hasConfiguredMcpServer(options.appServerArgs)) {
+          if (input.interactionMode && !connection.collaborationModes.has(input.interactionMode)) {
+            return yield* new CodexSessionRuntimeCollaborationModeUnavailableError({
+              mode: input.interactionMode,
+              availableModes: [...connection.collaborationModes],
+            });
+          }
+          if (options.mcpServer || hasConfiguredMcpServer(options.appServerArgs)) {
             yield* client.request("config/mcpServer/reload", undefined).pipe(
               Effect.catch((cause) =>
                 Effect.logWarning("Failed to refresh Codex MCP tool catalog before turn.", {
@@ -1284,18 +1858,82 @@ export const makeCodexSessionRuntime = (
             ...(input.serviceTier ? { serviceTier: input.serviceTier } : {}),
             ...(input.effort ? { effort: input.effort } : {}),
             ...(input.interactionMode ? { interactionMode: input.interactionMode } : {}),
+            ...(input.structuredInputs ? { structuredInputs: input.structuredInputs } : {}),
           });
-          const rawResponse = yield* client.raw.request("turn/start", params);
-          const response = yield* decodeV2TurnStartResponse(rawResponse).pipe(
-            Effect.mapError((error) =>
-              CodexErrors.CodexAppServerProtocolParseError.fromSchemaError(
-                "decode-response-payload",
-                error,
-                { method: "turn/start" },
-              ),
-            ),
-          );
-          const turnId = TurnId.make(response.turn.id);
+          const sessionBeforeSend = yield* Ref.get(sessionRef);
+          const activeTurnId =
+            sessionBeforeSend.status === "running" ? sessionBeforeSend.activeTurnId : undefined;
+
+          const startTurn = (delivery: "started" | "queued") =>
+            Effect.gen(function* () {
+              const rawResponse = yield* client.raw.request("turn/start", params);
+              const response = yield* decodeV2TurnStartResponse(rawResponse).pipe(
+                Effect.mapError((error) =>
+                  CodexErrors.CodexAppServerProtocolParseError.fromSchemaError(
+                    "decode-response-payload",
+                    error,
+                    { method: "turn/start" },
+                  ),
+                ),
+              );
+              return { turnId: TurnId.make(response.turn.id), delivery } as const;
+            });
+
+          const accepted = activeTurnId
+            ? yield* Effect.gen(function* () {
+                const clientUserMessageId =
+                  input.clientUserMessageId ?? (yield* randomUUIDv4("steer-message"));
+                const steerParams = yield* buildTurnSteerParams({
+                  threadId: providerThreadId,
+                  expectedTurnId: activeTurnId,
+                  clientUserMessageId,
+                  turnInput: params.input,
+                });
+                return yield* client.request("turn/steer", steerParams).pipe(
+                  Effect.map((response) => ({
+                    turnId: TurnId.make(response.turnId),
+                    delivery: "steered" as const,
+                  })),
+                  Effect.tap((result) =>
+                    emitEvent({
+                      kind: "notification",
+                      threadId: options.threadId,
+                      method: "turn/steered",
+                      turnId: result.turnId,
+                      payload: { clientUserMessageId },
+                    }),
+                  ),
+                  Effect.catchIf(isTurnSteerUnavailableError, () =>
+                    startTurn("queued").pipe(
+                      Effect.tap((result) =>
+                        emitEvent({
+                          kind: "notification",
+                          threadId: options.threadId,
+                          method: "turn/queued",
+                          turnId: result.turnId,
+                          payload: {
+                            clientUserMessageId,
+                            reason: "turn/steer is unavailable",
+                          },
+                        }),
+                      ),
+                    ),
+                  ),
+                  Effect.catchIf(
+                    (error) => activeTurnNotSteerableKind(error) !== undefined,
+                    (error) =>
+                      Effect.fail(
+                        new CodexSessionRuntimeActiveTurnNotSteerableError({
+                          turnId: activeTurnId,
+                          turnKind: activeTurnNotSteerableKind(error),
+                          cause: error,
+                        }),
+                      ),
+                  ),
+                );
+              })
+            : yield* startTurn("started");
+          const { turnId, delivery } = accepted;
           yield* updateSession(sessionRef, {
             status: "running",
             activeTurnId: turnId,
@@ -1305,6 +1943,7 @@ export const makeCodexSessionRuntime = (
           return {
             threadId: options.threadId,
             turnId,
+            delivery,
             ...(resumedProviderThreadId
               ? { resumeCursor: { threadId: resumedProviderThreadId } }
               : {}),
@@ -1343,6 +1982,187 @@ export const makeCodexSessionRuntime = (
             activeTurnId: undefined,
           });
           return parseThreadSnapshot(response);
+        }),
+      syncThreadLifecycle: (action) =>
+        Effect.gen(function* () {
+          const providerThreadId = yield* readProviderThreadId;
+          switch (action.type) {
+            case "archive":
+              yield* client.request("thread/archive", { threadId: providerThreadId });
+              return;
+            case "unarchive":
+              yield* client.request("thread/unarchive", { threadId: providerThreadId });
+              return;
+            case "delete":
+              yield* client.request("thread/delete", { threadId: providerThreadId });
+              return;
+            case "name":
+              yield* client.request("thread/name/set", {
+                threadId: providerThreadId,
+                name: action.name,
+              });
+              return;
+            case "compact":
+              yield* client.request("thread/compact/start", { threadId: providerThreadId });
+              return;
+            case "review":
+              yield* client.request("review/start", {
+                threadId: providerThreadId,
+                delivery: action.delivery,
+                target: action.target,
+              });
+              return;
+          }
+        }),
+      manageMcp: (operation) =>
+        Effect.gen(function* () {
+          const threadId = yield* readProviderThreadId;
+          switch (operation.type) {
+            case "status": {
+              const response = yield* client.request("mcpServerStatus/list", {
+                threadId,
+                detail: "full",
+              });
+              return {
+                type: "status",
+                servers: response.data.map((server) => ({
+                  name: server.name,
+                  authStatus: server.authStatus,
+                  ...(server.serverInfo !== undefined ? { serverInfo: server.serverInfo } : {}),
+                  tools: Object.values(server.tools),
+                  resources: server.resources,
+                  resourceTemplates: server.resourceTemplates,
+                })),
+              };
+            }
+            case "oauth": {
+              const response = yield* client.request("mcpServer/oauth/login", {
+                name: operation.server,
+              });
+              return {
+                type: "oauth",
+                server: operation.server,
+                authorizationUrl: response.authorizationUrl,
+              };
+            }
+            case "resourceRead": {
+              const response = yield* client.request("mcpServer/resource/read", {
+                threadId,
+                server: operation.server,
+                uri: operation.uri,
+              });
+              return {
+                type: "resourceRead",
+                server: operation.server,
+                uri: operation.uri,
+                contents: response.contents,
+              };
+            }
+            case "toolCall": {
+              const response = yield* client.request("mcpServer/tool/call", {
+                threadId,
+                server: operation.server,
+                tool: operation.tool,
+                ...(operation.arguments !== undefined ? { arguments: operation.arguments } : {}),
+              });
+              return {
+                type: "toolCall",
+                server: operation.server,
+                tool: operation.tool,
+                content: response.content,
+                ...(response.isError !== undefined && response.isError !== null
+                  ? { isError: response.isError }
+                  : {}),
+                ...(response.structuredContent !== undefined
+                  ? { structuredContent: response.structuredContent }
+                  : {}),
+              };
+            }
+            case "reload":
+              yield* client.request("config/mcpServer/reload", undefined);
+              return { type: "reload" };
+            case "setEnabled": {
+              if (!/^[A-Za-z0-9_-]+$/.test(operation.server)) {
+                return yield* CodexErrors.CodexAppServerRequestError.invalidParams(
+                  "MCP server names used in config paths may contain only letters, numbers, underscores, and hyphens.",
+                  { server: operation.server },
+                );
+              }
+              yield* client.request("config/value/write", {
+                keyPath: `mcp_servers.${operation.server}.enabled`,
+                value: operation.enabled,
+                mergeStrategy: "replace",
+              });
+              yield* client.request("config/mcpServer/reload", undefined);
+              return {
+                type: "setEnabled",
+                server: operation.server,
+                enabled: operation.enabled,
+              };
+            }
+            case "threadFork": {
+              const response = yield* client.request("thread/fork", { threadId });
+              return {
+                type: "threadFork",
+                providerThreadId: response.thread.id,
+                ...(response.thread.name !== undefined ? { name: response.thread.name } : {}),
+                preview: response.thread.preview,
+              };
+            }
+            case "threadList": {
+              const response = yield* client.request("thread/list", {
+                archived: operation.archived ?? false,
+                ...(operation.searchTerm?.trim()
+                  ? { searchTerm: operation.searchTerm.trim() }
+                  : {}),
+                sortKey: "updated_at",
+                sortDirection: "desc",
+                limit: 100,
+              });
+              return {
+                type: "threadList",
+                threads: response.data.map((listedThread) => ({
+                  providerThreadId: listedThread.id,
+                  ...(listedThread.name !== undefined ? { name: listedThread.name } : {}),
+                  preview: listedThread.preview,
+                  cwd: listedThread.cwd,
+                  createdAt: listedThread.createdAt,
+                  updatedAt: listedThread.updatedAt,
+                  archived: operation.archived ?? false,
+                })),
+              };
+            }
+            case "threadLifecycle": {
+              switch (operation.action.type) {
+                case "archive":
+                  yield* client.request("thread/archive", {
+                    threadId: operation.providerThreadId,
+                  });
+                  break;
+                case "unarchive":
+                  yield* client.request("thread/unarchive", {
+                    threadId: operation.providerThreadId,
+                  });
+                  break;
+                case "delete":
+                  yield* client.request("thread/delete", {
+                    threadId: operation.providerThreadId,
+                  });
+                  break;
+                case "name":
+                  yield* client.request("thread/name/set", {
+                    threadId: operation.providerThreadId,
+                    name: operation.action.name,
+                  });
+                  break;
+              }
+              return {
+                type: "threadLifecycle",
+                providerThreadId: operation.providerThreadId,
+                action: operation.action.type,
+              };
+            }
+          }
         }),
       respondToRequest: (requestId, decision) =>
         Effect.gen(function* () {

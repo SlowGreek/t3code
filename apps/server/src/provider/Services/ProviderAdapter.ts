@@ -8,6 +8,8 @@
  * @module ProviderAdapter
  */
 import type {
+  CodexMcpOperation,
+  CodexMcpResult,
   ApprovalRequestId,
   ProviderApprovalDecision,
   ProviderDriverKind,
@@ -41,6 +43,22 @@ export interface ProviderThreadSnapshot {
   readonly threadId: ThreadId;
   readonly turns: ReadonlyArray<ProviderThreadTurnSnapshot>;
 }
+
+export type ProviderThreadLifecycleAction =
+  | { readonly type: "archive" }
+  | { readonly type: "unarchive" }
+  | { readonly type: "delete" }
+  | { readonly type: "name"; readonly name: string }
+  | { readonly type: "compact" }
+  | {
+      readonly type: "review";
+      readonly delivery: "inline" | "detached";
+      readonly target:
+        | { readonly type: "uncommittedChanges" }
+        | { readonly type: "baseBranch"; readonly branch: string }
+        | { readonly type: "commit"; readonly sha: string; readonly title?: string | null }
+        | { readonly type: "custom"; readonly instructions: string };
+    };
 
 export interface ProviderAdapterShape<TError> {
   /**
@@ -113,6 +131,18 @@ export interface ProviderAdapterShape<TError> {
     threadId: ThreadId,
     numTurns: number,
   ) => Effect.Effect<ProviderThreadSnapshot, TError>;
+
+  /** Optional native lifecycle synchronization for authoritative provider threads. */
+  readonly syncThreadLifecycle?: (
+    threadId: ThreadId,
+    action: ProviderThreadLifecycleAction,
+  ) => Effect.Effect<void, TError>;
+
+  /** Native Codex MCP management, present only on Codex adapters. */
+  readonly manageCodexMcp?: (
+    threadId: ThreadId,
+    operation: CodexMcpOperation,
+  ) => Effect.Effect<CodexMcpResult, TError>;
 
   /**
    * Stop all sessions owned by this adapter.

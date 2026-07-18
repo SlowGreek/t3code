@@ -56,24 +56,55 @@ export class CodexAppServerClient extends Context.Service<
         CodexError.CodexAppServerError
       >,
     ) => Effect.Effect<void>;
+    readonly registerServerRequest: <M extends CodexRpc.ServerRequestMethod>(
+      method: M,
+      accepts: (payload: CodexRpc.ServerRequestParamsByMethod[M]) => boolean,
+      handler: (
+        payload: CodexRpc.ServerRequestParamsByMethod[M],
+      ) => Effect.Effect<
+        CodexRpc.ServerRequestResponsesByMethod[M],
+        CodexError.CodexAppServerError
+      >,
+    ) => Effect.Effect<Effect.Effect<void>>;
     readonly handleServerNotification: <M extends CodexRpc.ServerNotificationMethod>(
       method: M,
       handler: (
         payload: CodexRpc.ServerNotificationParamsByMethod[M],
       ) => Effect.Effect<void, CodexError.CodexAppServerError>,
     ) => Effect.Effect<void>;
+    readonly registerServerNotification: <M extends CodexRpc.ServerNotificationMethod>(
+      method: M,
+      accepts: (payload: CodexRpc.ServerNotificationParamsByMethod[M]) => boolean,
+      handler: (
+        payload: CodexRpc.ServerNotificationParamsByMethod[M],
+      ) => Effect.Effect<void, CodexError.CodexAppServerError>,
+    ) => Effect.Effect<Effect.Effect<void>>;
     readonly handleUnknownServerRequest: (
       handler: (
         method: string,
         params: unknown,
       ) => Effect.Effect<unknown, CodexError.CodexAppServerError>,
     ) => Effect.Effect<void>;
+    readonly registerUnknownServerRequest: (
+      accepts: (method: string, params: unknown) => boolean,
+      handler: (
+        method: string,
+        params: unknown,
+      ) => Effect.Effect<unknown, CodexError.CodexAppServerError>,
+    ) => Effect.Effect<Effect.Effect<void>>;
     readonly handleUnknownServerNotification: (
       handler: (
         method: string,
         params: unknown,
       ) => Effect.Effect<void, CodexError.CodexAppServerError>,
     ) => Effect.Effect<void>;
+    readonly registerUnknownServerNotification: (
+      accepts: (method: string, params: unknown) => boolean,
+      handler: (
+        method: string,
+        params: unknown,
+      ) => Effect.Effect<void, CodexError.CodexAppServerError>,
+    ) => Effect.Effect<Effect.Effect<void>>;
   }
 >()("effect-codex-app-server/client/CodexAppServerClient") {}
 
@@ -83,6 +114,14 @@ type ServerRequestHandler = (
 type ServerNotificationHandler = (
   payload: unknown,
 ) => Effect.Effect<void, CodexError.CodexAppServerError>;
+interface RoutedServerRequestHandler {
+  readonly accepts: (payload: unknown) => boolean;
+  readonly handler: ServerRequestHandler;
+}
+interface RoutedServerNotificationHandler {
+  readonly accepts: (payload: unknown) => boolean;
+  readonly handler: ServerNotificationHandler;
+}
 
 export const make = Effect.fn("effect-codex-app-server/CodexAppServerClient.make")(function* (
   stdio: Stdio.Stdio,
@@ -91,12 +130,38 @@ export const make = Effect.fn("effect-codex-app-server/CodexAppServerClient.make
 ): Effect.fn.Return<CodexAppServerClient["Service"], never, Scope.Scope> {
   const requestHandlers = new Map<string, ServerRequestHandler>();
   const notificationHandlers = new Map<string, Array<ServerNotificationHandler>>();
+  const routedRequestHandlers = new Map<string, Map<number, RoutedServerRequestHandler>>();
+  const routedNotificationHandlers = new Map<
+    string,
+    Map<number, RoutedServerNotificationHandler>
+  >();
+  let nextRegistrationId = 1;
   let unknownRequestHandler:
     | ((method: string, params: unknown) => Effect.Effect<unknown, CodexError.CodexAppServerError>)
     | undefined;
   let unknownNotificationHandler:
     | ((method: string, params: unknown) => Effect.Effect<void, CodexError.CodexAppServerError>)
     | undefined;
+  const routedUnknownRequestHandlers = new Map<
+    number,
+    {
+      readonly accepts: (method: string, params: unknown) => boolean;
+      readonly handler: (
+        method: string,
+        params: unknown,
+      ) => Effect.Effect<unknown, CodexError.CodexAppServerError>;
+    }
+  >();
+  const routedUnknownNotificationHandlers = new Map<
+    number,
+    {
+      readonly accepts: (method: string, params: unknown) => boolean;
+      readonly handler: (
+        method: string,
+        params: unknown,
+      ) => Effect.Effect<void, CodexError.CodexAppServerError>;
+    }
+  >();
 
   const getServerRequestParamSchema = <M extends CodexRpc.ServerRequestMethod>(
     method: M,
@@ -150,18 +215,31 @@ export const make = Effect.fn("effect-codex-app-server/CodexAppServerClient.make
 
     if (schema) {
       return decodeNotificationPayload(notification.method, schema, notification.params).pipe(
-        Effect.flatMap((decoded) =>
-          Effect.forEach(handlers, (handler) => handler(decoded), { discard: true }),
-        ),
+        Effect.flatMap((decoded) => {
+          const routedHandlers = Array.from(
+            routedNotificationHandlers.get(notification.method)?.values() ?? [],
+          ).filter(({ accepts }) => accepts(decoded));
+          return Effect.forEach(
+            [...handlers, ...routedHandlers.map(({ handler }) => handler)],
+            (handler) => handler(decoded),
+            { discard: true },
+          );
+        }),
         Effect.catch(() => Effect.void),
       );
     }
 
-    return unknownNotificationHandler
-      ? unknownNotificationHandler(notification.method, notification.params).pipe(
-          Effect.catch(() => Effect.void),
-        )
-      : Effect.void;
+    const routedHandlers = [...routedUnknownNotificationHandlers.values()].filter(({ accepts }) =>
+      accepts(notification.method, notification.params),
+    );
+    return Effect.forEach(
+      [
+        ...routedHandlers.map(({ handler }) => handler),
+        ...(unknownNotificationHandler ? [unknownNotificationHandler] : []),
+      ],
+      (handler) => handler(notification.method, notification.params),
+      { discard: true },
+    ).pipe(Effect.catch(() => Effect.void));
   };
 
   const dispatchRequest = (
@@ -171,17 +249,26 @@ export const make = Effect.fn("effect-codex-app-server/CodexAppServerClient.make
       const method = request.method as CodexRpc.ServerRequestMethod;
       const payloadSchema = getServerRequestParamSchema(method);
       const responseSchema = getServerRequestResponseSchema(method);
-      const handler = requestHandlers.get(method);
 
       return decodeOptionalPayload(method, payloadSchema, request.params).pipe(
-        Effect.flatMap((decoded) => runHandler(handler, decoded, method)),
+        Effect.flatMap((decoded) => {
+          const routedHandler = Array.from(routedRequestHandlers.get(method)?.values() ?? []).find(
+            ({ accepts }) => accepts(decoded),
+          )?.handler;
+          return runHandler(routedHandler ?? requestHandlers.get(method), decoded, method);
+        }),
         Effect.flatMap((result) => encodeOptionalPayload(method, responseSchema, result)),
       );
     }
 
-    return unknownRequestHandler
-      ? unknownRequestHandler(request.method, request.params)
-      : Effect.fail(CodexError.CodexAppServerRequestError.methodNotFound(request.method));
+    const routedHandler = [...routedUnknownRequestHandlers.values()].find(({ accepts }) =>
+      accepts(request.method, request.params),
+    )?.handler;
+    return routedHandler
+      ? routedHandler(request.method, request.params)
+      : unknownRequestHandler
+        ? unknownRequestHandler(request.method, request.params)
+        : Effect.fail(CodexError.CodexAppServerRequestError.methodNotFound(request.method));
   };
 
   const transport = yield* CodexProtocol.makeCodexAppServerPatchedProtocol({
@@ -233,19 +320,69 @@ export const make = Effect.fn("effect-codex-app-server/CodexAppServerClient.make
       Effect.sync(() => {
         requestHandlers.set(method, handler as ServerRequestHandler);
       }),
+    registerServerRequest: (method, accepts, handler) =>
+      Effect.sync(() => {
+        const registrationId = nextRegistrationId++;
+        const current = routedRequestHandlers.get(method) ?? new Map();
+        current.set(registrationId, {
+          accepts: accepts as (payload: unknown) => boolean,
+          handler: handler as ServerRequestHandler,
+        });
+        routedRequestHandlers.set(method, current);
+        return Effect.sync(() => {
+          const registered = routedRequestHandlers.get(method);
+          registered?.delete(registrationId);
+          if (registered?.size === 0) {
+            routedRequestHandlers.delete(method);
+          }
+        });
+      }),
     handleServerNotification: (method, handler) =>
       Effect.sync(() => {
         const current = notificationHandlers.get(method) ?? [];
         current.push(handler as ServerNotificationHandler);
         notificationHandlers.set(method, current);
       }),
+    registerServerNotification: (method, accepts, handler) =>
+      Effect.sync(() => {
+        const registrationId = nextRegistrationId++;
+        const current = routedNotificationHandlers.get(method) ?? new Map();
+        current.set(registrationId, {
+          accepts: accepts as (payload: unknown) => boolean,
+          handler: handler as ServerNotificationHandler,
+        });
+        routedNotificationHandlers.set(method, current);
+        return Effect.sync(() => {
+          const registered = routedNotificationHandlers.get(method);
+          registered?.delete(registrationId);
+          if (registered?.size === 0) {
+            routedNotificationHandlers.delete(method);
+          }
+        });
+      }),
     handleUnknownServerRequest: (handler) =>
       Effect.sync(() => {
         unknownRequestHandler = handler;
       }),
+    registerUnknownServerRequest: (accepts, handler) =>
+      Effect.sync(() => {
+        const registrationId = nextRegistrationId++;
+        routedUnknownRequestHandlers.set(registrationId, { accepts, handler });
+        return Effect.sync(() => {
+          routedUnknownRequestHandlers.delete(registrationId);
+        });
+      }),
     handleUnknownServerNotification: (handler) =>
       Effect.sync(() => {
         unknownNotificationHandler = handler;
+      }),
+    registerUnknownServerNotification: (accepts, handler) =>
+      Effect.sync(() => {
+        const registrationId = nextRegistrationId++;
+        routedUnknownNotificationHandlers.set(registrationId, { accepts, handler });
+        return Effect.sync(() => {
+          routedUnknownNotificationHandlers.delete(registrationId);
+        });
       }),
   });
 });

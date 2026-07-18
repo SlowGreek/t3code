@@ -24,7 +24,7 @@ describe("hasCloudPublicConfig", () => {
     expect(hasCloudPublicConfig()).toBe(false);
 
     vi.stubEnv("VITE_T3CODE_RELAY_URL", "https://relay.example.test");
-    expect(hasCloudPublicConfig()).toBe(true);
+    expect(hasCloudPublicConfig()).toBe(false);
   });
 
   it("rejects an insecure relay URL", () => {

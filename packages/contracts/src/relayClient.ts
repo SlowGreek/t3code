@@ -12,6 +12,10 @@ export const RelayClientStatusSchema = Schema.Union([
     version: Schema.String,
   }),
   Schema.Struct({
+    status: Schema.Literal("disabled"),
+    version: Schema.String,
+  }),
+  Schema.Struct({
     status: Schema.Literal("unsupported"),
     platform: Schema.String,
     arch: Schema.String,
@@ -44,6 +48,7 @@ export const RelayClientInstallProgressEventSchema = Schema.Union([
 export type RelayClientInstallProgressEvent = typeof RelayClientInstallProgressEventSchema.Type;
 
 export const RelayClientInstallFailureReasonSchema = Schema.Literals([
+  "disabled",
   "download_failed",
   "invalid_checksum",
   "install_locked",

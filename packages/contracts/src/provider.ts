@@ -5,6 +5,7 @@ import {
   EventId,
   IsoDateTime,
   ProviderItemId,
+  MessageId,
   ThreadId,
   TurnId,
 } from "./baseSchemas.ts";
@@ -18,6 +19,7 @@ import {
   ProviderInteractionMode,
   ProviderRequestKind,
   ProviderSandboxMode,
+  ProviderStructuredInput,
   ProviderUserInputAnswers,
   RuntimeMode,
 } from "./orchestration.ts";
@@ -66,6 +68,8 @@ export type ProviderSessionStartInput = typeof ProviderSessionStartInput.Type;
 
 export const ProviderSendTurnInput = Schema.Struct({
   threadId: ThreadId,
+  /** Client-generated user message id used to reconcile native provider steering. */
+  clientUserMessageId: Schema.optional(MessageId),
   input: Schema.optional(
     TrimmedNonEmptyString.check(Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_INPUT_CHARS)),
   ),
@@ -74,12 +78,15 @@ export const ProviderSendTurnInput = Schema.Struct({
   ),
   modelSelection: Schema.optional(ModelSelection),
   interactionMode: Schema.optional(ProviderInteractionMode),
+  structuredInputs: Schema.optional(Schema.Array(ProviderStructuredInput)),
 });
 export type ProviderSendTurnInput = typeof ProviderSendTurnInput.Type;
 
 export const ProviderTurnStartResult = Schema.Struct({
   threadId: ThreadId,
   turnId: TurnId,
+  /** How the provider accepted this message. */
+  delivery: Schema.optional(Schema.Literals(["started", "steered", "queued"])),
   resumeCursor: Schema.optional(Schema.Unknown),
 });
 export type ProviderTurnStartResult = typeof ProviderTurnStartResult.Type;

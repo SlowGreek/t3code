@@ -6,6 +6,29 @@ import { ProviderRuntimeEvent } from "./providerRuntime.ts";
 const decodeRuntimeEvent = Schema.decodeUnknownSync(ProviderRuntimeEvent);
 
 describe("ProviderRuntimeEvent", () => {
+  it("decodes future Codex events through the raw extension channel", () => {
+    const parsed = decodeRuntimeEvent({
+      type: "runtime.raw",
+      eventId: "event-future",
+      provider: "codex",
+      createdAt: "2026-02-28T00:00:00.000Z",
+      threadId: "thread-1",
+      raw: {
+        source: "codex.app-server.notification",
+        method: "future/codex/event",
+        payload: { feature: "new" },
+      },
+      payload: {
+        method: "future/codex/event",
+        kind: "notification",
+        payload: { feature: "new" },
+      },
+    });
+
+    expect(parsed.type).toBe("runtime.raw");
+    expect(parsed.raw?.method).toBe("future/codex/event");
+  });
+
   it("accepts fork-provided driver kinds as branded slugs", () => {
     const parsed = decodeRuntimeEvent({
       type: "session.started",

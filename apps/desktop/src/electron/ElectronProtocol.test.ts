@@ -3,15 +3,22 @@ import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import { beforeEach, vi } from "vite-plus/test";
 
-const { handleMock, netFetchMock, unhandleMock } = vi.hoisted(() => ({
-  handleMock: vi.fn(),
-  netFetchMock: vi.fn(),
-  unhandleMock: vi.fn(),
-}));
+const { handleMock, netFetchMock, registerSchemesAsPrivilegedMock, unhandleMock } = vi.hoisted(
+  () => ({
+    handleMock: vi.fn(),
+    netFetchMock: vi.fn(),
+    registerSchemesAsPrivilegedMock: vi.fn(),
+    unhandleMock: vi.fn(),
+  }),
+);
 
 vi.mock("electron", () => ({
   net: { fetch: netFetchMock },
-  protocol: { handle: handleMock, unhandle: unhandleMock },
+  protocol: {
+    handle: handleMock,
+    registerSchemesAsPrivileged: registerSchemesAsPrivilegedMock,
+    unhandle: unhandleMock,
+  },
 }));
 
 import * as ElectronProtocol from "./ElectronProtocol.ts";
@@ -20,7 +27,39 @@ describe("ElectronProtocol", () => {
   beforeEach(() => {
     handleMock.mockReset();
     netFetchMock.mockReset();
+    registerSchemesAsPrivilegedMock.mockReset();
     unhandleMock.mockReset();
+  });
+
+  it("registers production and development schemes as secure standard origins", () => {
+    ElectronProtocol.registerDesktopSchemesAsPrivileged();
+
+    assert.deepEqual(registerSchemesAsPrivilegedMock.mock.calls, [
+      [
+        [
+          {
+            scheme: "t3code",
+            privileges: {
+              standard: true,
+              secure: true,
+              supportFetchAPI: true,
+              corsEnabled: true,
+              stream: true,
+            },
+          },
+          {
+            scheme: "t3code-dev",
+            privileges: {
+              standard: true,
+              secure: true,
+              supportFetchAPI: true,
+              corsEnabled: true,
+              stream: true,
+            },
+          },
+        ],
+      ],
+    ]);
   });
 
   it.effect("proxies the stable renderer origin to the current app server", () =>
@@ -57,7 +96,7 @@ describe("ElectronProtocol", () => {
           assert.equal(yield* Effect.promise(() => response.text()), "ok");
           assert.include(
             response.headers.get("content-security-policy") ?? "",
-            "script-src 'self' 'unsafe-inline' https://clerk.t3.codes https://challenges.cloudflare.com",
+            "script-src 'self' t3code-dev: 'unsafe-inline' https://clerk.t3.codes https://challenges.cloudflare.com",
           );
           assert.include(
             response.headers.get("content-security-policy") ?? "",
@@ -211,11 +250,14 @@ describe("ElectronProtocol", () => {
 
     assert.deepEqual(directives["script-src"], [
       "'self'",
+      "t3code:",
       "'unsafe-inline'",
       "https://clerk.t3.codes",
       "https://challenges.cloudflare.com",
     ]);
     assert.deepEqual(directives["connect-src"], ["'self'", "http:", "https:", "ws:", "wss:"]);
+    assert.deepEqual(directives["style-src"], ["'self'", "t3code:", "'unsafe-inline'"]);
+    assert.deepEqual(directives["worker-src"], ["'self'", "t3code:", "blob:"]);
     assert.deepEqual(directives["img-src"], [
       "'self'",
       "t3code:",

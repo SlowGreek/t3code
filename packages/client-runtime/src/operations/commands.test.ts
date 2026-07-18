@@ -21,7 +21,13 @@ import {
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import * as RpcSession from "../rpc/session.ts";
 import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
-import { archiveThread, createProject, stopThreadSession } from "./commands.ts";
+import {
+  archiveThread,
+  compactThread,
+  createProject,
+  startThreadReview,
+  stopThreadSession,
+} from "./commands.ts";
 
 const TEST_CRYPTO_LAYER = Layer.succeed(
   Crypto.Crypto,
@@ -112,6 +118,48 @@ describe("environment commands", () => {
           createdAt: "2026-06-06T00:01:00.000Z",
         },
       ]);
+    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+  );
+
+  it.effect("dispatches manual Codex compaction with generated metadata", () =>
+    Effect.gen(function* () {
+      const dispatched: ClientOrchestrationCommand[] = [];
+      const supervisor = yield* makeSupervisor(dispatched);
+
+      yield* compactThread({
+        threadId: ThreadId.make("thread-compact"),
+        createdAt: "2026-06-06T00:02:00.000Z",
+      }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+
+      expect(dispatched).toEqual([
+        {
+          type: "thread.compact",
+          commandId: "00000000-0000-4000-8000-000000000000",
+          threadId: "thread-compact",
+          createdAt: "2026-06-06T00:02:00.000Z",
+        },
+      ]);
+    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+  );
+
+  it.effect("dispatches native review targets and delivery mode", () =>
+    Effect.gen(function* () {
+      const dispatched: ClientOrchestrationCommand[] = [];
+      const supervisor = yield* makeSupervisor(dispatched);
+
+      yield* startThreadReview({
+        threadId: ThreadId.make("thread-review"),
+        target: { type: "baseBranch", branch: "main" },
+        delivery: "detached",
+        createdAt: "2026-06-06T00:03:00.000Z",
+      }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+
+      expect(dispatched[0]).toMatchObject({
+        type: "thread.review.start",
+        threadId: "thread-review",
+        target: { type: "baseBranch", branch: "main" },
+        delivery: "detached",
+      });
     }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
   );
 
