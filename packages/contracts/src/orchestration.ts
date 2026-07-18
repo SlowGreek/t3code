@@ -183,6 +183,20 @@ export type ChatAttachment = typeof ChatAttachment.Type;
 const UploadChatAttachment = Schema.Union([UploadChatImageAttachment]);
 export type UploadChatAttachment = typeof UploadChatAttachment.Type;
 
+export const ProviderStructuredInput = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("skill"),
+    name: TrimmedNonEmptyString,
+    path: TrimmedNonEmptyString,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("mention"),
+    name: TrimmedNonEmptyString,
+    path: TrimmedNonEmptyString,
+  }),
+]);
+export type ProviderStructuredInput = typeof ProviderStructuredInput.Type;
+
 export const ProjectScriptIcon = Schema.Literals([
   "play",
   "test",
@@ -615,6 +629,7 @@ export const ThreadTurnStartCommand = Schema.Struct({
     role: Schema.Literal("user"),
     text: Schema.String,
     attachments: Schema.Array(ChatAttachment),
+    structuredInputs: Schema.optional(Schema.Array(ProviderStructuredInput)),
   }),
   modelSelection: Schema.optional(ModelSelection),
   titleSeed: Schema.optional(TrimmedNonEmptyString),
@@ -636,6 +651,7 @@ const ClientThreadTurnStartCommand = Schema.Struct({
     role: Schema.Literal("user"),
     text: Schema.String,
     attachments: Schema.Array(UploadChatAttachment),
+    structuredInputs: Schema.optional(Schema.Array(ProviderStructuredInput)),
   }),
   modelSelection: Schema.optional(ModelSelection),
   titleSeed: Schema.optional(TrimmedNonEmptyString),
@@ -976,6 +992,7 @@ export const ThreadMessageSentPayload = Schema.Struct({
 export const ThreadTurnStartRequestedPayload = Schema.Struct({
   threadId: ThreadId,
   messageId: MessageId,
+  structuredInputs: Schema.optional(Schema.Array(ProviderStructuredInput)),
   modelSelection: Schema.optional(ModelSelection),
   titleSeed: Schema.optional(TrimmedNonEmptyString),
   runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(Effect.succeed(DEFAULT_RUNTIME_MODE))),

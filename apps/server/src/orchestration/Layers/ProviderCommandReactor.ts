@@ -650,6 +650,7 @@ const make = Effect.gen(function* () {
     readonly clientUserMessageId: MessageId;
     readonly messageText: string;
     readonly attachments?: ReadonlyArray<ChatAttachment>;
+    readonly structuredInputs?: ProviderSendTurnInput["structuredInputs"];
     readonly modelSelection?: ModelSelection;
     readonly interactionMode?: "default" | "plan";
     readonly createdAt: string;
@@ -688,13 +689,15 @@ const make = Effect.gen(function* () {
               .sessionModelSwitch;
     const requestedModelSelection =
       input.modelSelection ?? threadModelSelections.get(input.threadId) ?? thread.modelSelection;
-    const providers = yield* providerRegistry.getProviders;
-    const structuredInputs = buildProviderStructuredInputs({
-      text: input.messageText,
-      skills:
-        providers.find((provider) => provider.instanceId === requestedModelSelection.instanceId)
-          ?.skills ?? [],
-    });
+    const structuredInputs =
+      input.structuredInputs ??
+      buildProviderStructuredInputs({
+        text: input.messageText,
+        skills:
+          (yield* providerRegistry.getProviders).find(
+            (provider) => provider.instanceId === requestedModelSelection.instanceId,
+          )?.skills ?? [],
+      });
     const modelForTurn =
       sessionModelSwitch === "unsupported" && input.modelSelection === undefined
         ? activeSession?.model !== undefined
@@ -914,6 +917,9 @@ const make = Effect.gen(function* () {
       clientUserMessageId: event.payload.messageId,
       messageText: message.text,
       ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
+      ...(event.payload.structuredInputs !== undefined
+        ? { structuredInputs: event.payload.structuredInputs }
+        : {}),
       ...(event.payload.modelSelection !== undefined
         ? { modelSelection: event.payload.modelSelection }
         : {}),

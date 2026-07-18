@@ -19,6 +19,7 @@ import {
   ProviderInteractionMode,
   ProviderRequestKind,
   ProviderSandboxMode,
+  ProviderStructuredInput,
   ProviderUserInputAnswers,
   RuntimeMode,
 } from "./orchestration.ts";
@@ -77,22 +78,7 @@ export const ProviderSendTurnInput = Schema.Struct({
   ),
   modelSelection: Schema.optional(ModelSelection),
   interactionMode: Schema.optional(ProviderInteractionMode),
-  structuredInputs: Schema.optional(
-    Schema.Array(
-      Schema.Union([
-        Schema.Struct({
-          type: Schema.Literal("skill"),
-          name: TrimmedNonEmptyString,
-          path: TrimmedNonEmptyString,
-        }),
-        Schema.Struct({
-          type: Schema.Literal("mention"),
-          name: TrimmedNonEmptyString,
-          path: TrimmedNonEmptyString,
-        }),
-      ]),
-    ),
-  ),
+  structuredInputs: Schema.optional(Schema.Array(ProviderStructuredInput)),
 });
 export type ProviderSendTurnInput = typeof ProviderSendTurnInput.Type;
 

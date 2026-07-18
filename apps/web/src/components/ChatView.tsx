@@ -67,6 +67,7 @@ import { AsyncResult } from "effect/unstable/reactivity";
 import { isElectron } from "../env";
 import { readLocalApi } from "../localApi";
 import { useDiffPanelStore } from "../diffPanelStore";
+import { resolveComposerStructuredInputs } from "../composerStructuredInputs";
 import {
   collapseExpandedComposerCursor,
   parseStandaloneComposerSlashCommand,
@@ -3979,6 +3980,20 @@ function ChatViewContent(props: ChatViewProps) {
       setThreadError(threadIdForSend, "Select a base branch before sending in New worktree mode.");
       return;
     }
+    const structuredInputResolution =
+      ctxSelectedProvider === ProviderDriverKind.make("codex")
+        ? resolveComposerStructuredInputs({
+            text: promptForSend,
+            skills:
+              providerStatuses.find(
+                (provider) => provider.instanceId === ctxSelectedModelSelection.instanceId,
+              )?.skills ?? [],
+          })
+        : { ok: true as const, inputs: [] };
+    if (!structuredInputResolution.ok) {
+      setThreadError(threadIdForSend, structuredInputResolution.message);
+      return;
+    }
 
     sendInFlightRef.current = true;
     beginLocalDispatch({ preparingWorktree: Boolean(baseBranchForWorktree) });
@@ -4172,6 +4187,9 @@ function ChatViewContent(props: ChatViewProps) {
             role: "user",
             text: outgoingMessageText,
             attachments: turnAttachmentsResult.value,
+            ...(structuredInputResolution.inputs.length > 0
+              ? { structuredInputs: structuredInputResolution.inputs }
+              : {}),
           },
           modelSelection: ctxSelectedModelSelection,
           titleSeed: title,
@@ -4460,6 +4478,20 @@ function ChatViewContent(props: ChatViewProps) {
         effort: ctxSelectedPromptEffort,
         text: trimmed,
       });
+      const structuredInputResolution =
+        ctxSelectedProvider === ProviderDriverKind.make("codex")
+          ? resolveComposerStructuredInputs({
+              text: trimmed,
+              skills:
+                providerStatuses.find(
+                  (provider) => provider.instanceId === ctxSelectedModelSelection.instanceId,
+                )?.skills ?? [],
+            })
+          : { ok: true as const, inputs: [] };
+      if (!structuredInputResolution.ok) {
+        setThreadError(threadIdForSend, structuredInputResolution.message);
+        return;
+      }
 
       sendInFlightRef.current = true;
       beginLocalDispatch({ preparingWorktree: false });
@@ -4518,6 +4550,9 @@ function ChatViewContent(props: ChatViewProps) {
               role: "user",
               text: outgoingMessageText,
               attachments: [],
+              ...(structuredInputResolution.inputs.length > 0
+                ? { structuredInputs: structuredInputResolution.inputs }
+                : {}),
             },
             modelSelection: ctxSelectedModelSelection,
             titleSeed: activeThread.title,

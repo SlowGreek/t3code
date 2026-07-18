@@ -503,6 +503,18 @@ describe("ProviderCommandReactor", () => {
           role: "user",
           text: "$frontend-design inspect [App.tsx](apps/web/src/App.tsx)",
           attachments: [],
+          structuredInputs: [
+            {
+              type: "mention",
+              name: "App.tsx",
+              path: "apps/web/src/App.tsx",
+            },
+            {
+              type: "skill",
+              name: "frontend-design",
+              path: "/skills/frontend-design/SKILL.md",
+            },
+          ],
         },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
@@ -526,14 +538,14 @@ describe("ProviderCommandReactor", () => {
       input: "$frontend-design inspect [App.tsx](apps/web/src/App.tsx)",
       structuredInputs: [
         {
-          type: "skill",
-          name: "frontend-design",
-          path: "/skills/frontend-design/SKILL.md",
-        },
-        {
           type: "mention",
           name: "App.tsx",
           path: "apps/web/src/App.tsx",
+        },
+        {
+          type: "skill",
+          name: "frontend-design",
+          path: "/skills/frontend-design/SKILL.md",
         },
       ],
     });
