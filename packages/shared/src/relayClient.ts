@@ -36,6 +36,10 @@ export type RelayClientStatus =
       readonly version: string;
     }
   | {
+      readonly status: "disabled";
+      readonly version: string;
+    }
+  | {
       readonly status: "unsupported";
       readonly platform: NodeJS.Platform;
       readonly arch: string;
@@ -47,6 +51,7 @@ export type AvailableRelayClient = Extract<RelayClientStatus, { readonly status:
 export class RelayClientInstallError extends Data.TaggedError("RelayClientInstallError")<{
   readonly reason:
     | "download_failed"
+    | "disabled"
     | "invalid_checksum"
     | "install_locked"
     | "override_missing"
@@ -134,6 +139,22 @@ export interface RelayClientShape {
 export class RelayClient extends Context.Service<RelayClient, RelayClientShape>()(
   "@t3tools/shared/relayClient",
 ) {}
+
+const disabledInstallError = new RelayClientInstallError({
+  reason: "disabled",
+  message: "Cloud relay clients are disabled in the workplace distribution.",
+});
+
+export const disabled = RelayClient.of({
+  resolve: Effect.succeed({
+    status: "disabled",
+    version: CLOUDFLARED_VERSION,
+  }),
+  install: Effect.fail(disabledInstallError),
+  installWithProgress: () => Effect.fail(disabledInstallError),
+});
+
+export const layerDisabled = Layer.succeed(RelayClient, disabled);
 
 function executableFileName(platform: NodeJS.Platform): string {
   return platform === "win32" ? "cloudflared.exe" : "cloudflared";

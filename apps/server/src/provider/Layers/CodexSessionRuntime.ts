@@ -108,7 +108,12 @@ export interface CodexSessionRuntimeOptions {
   readonly appServerArgs?: ReadonlyArray<string>;
   readonly mcpServer?: CodexThreadMcpServerConfig;
   readonly connection?: CodexAppServerConnection;
+  readonly clientTools?: ReadonlyMap<string, CodexDynamicClientTool>;
 }
+
+export type CodexDynamicClientTool = (
+  input: EffectCodexSchema.DynamicToolCallParams,
+) => Effect.Effect<EffectCodexSchema.DynamicToolCallResponse, CodexErrors.CodexAppServerError>;
 
 export interface CodexThreadMcpServerConfig {
   readonly endpoint: string;
@@ -779,6 +784,91 @@ function toCodexUserInputAnswers(
   ).pipe(Effect.map((entries) => Object.fromEntries(entries)));
 }
 
+function readMcpElicitationFieldLabel(
+  fieldId: string,
+  field: EffectCodexSchema.McpServerElicitationRequestParams__McpElicitationPrimitiveSchema,
+): string {
+  return "title" in field && typeof field.title === "string" && field.title.trim()
+    ? field.title
+    : fieldId;
+}
+
+function mcpElicitationOptions(
+  field: EffectCodexSchema.McpServerElicitationRequestParams__McpElicitationPrimitiveSchema,
+): ReadonlyArray<{ readonly label: string; readonly description: string }> {
+  if ("enum" in field && Array.isArray(field.enum)) {
+    return field.enum
+      .filter((entry): entry is string => typeof entry === "string")
+      .map((entry) => ({ label: entry, description: entry }));
+  }
+  if (
+    "items" in field &&
+    field.items &&
+    typeof field.items === "object" &&
+    "enum" in field.items &&
+    Array.isArray(field.items.enum)
+  ) {
+    return field.items.enum
+      .filter((entry): entry is string => typeof entry === "string")
+      .map((entry) => ({ label: entry, description: entry }));
+  }
+  if ("type" in field && field.type === "boolean") {
+    return [
+      { label: "Yes", description: "Yes" },
+      { label: "No", description: "No" },
+    ];
+  }
+  return [];
+}
+
+export function mcpElicitationQuestions(
+  payload: EffectCodexSchema.McpServerElicitationRequestParams,
+): ReadonlyArray<{
+  readonly id: string;
+  readonly header: string;
+  readonly question: string;
+  readonly options: ReadonlyArray<{ readonly label: string; readonly description: string }>;
+  readonly multiSelect: boolean;
+}> {
+  if (payload.mode === "url") {
+    return [
+      {
+        id: "action",
+        header: payload.serverName,
+        question: payload.message,
+        options: [
+          { label: "Open", description: payload.url },
+          { label: "Decline", description: "Do not continue." },
+        ],
+        multiSelect: false,
+      },
+    ];
+  }
+  return Object.entries(payload.requestedSchema.properties).map(([fieldId, field]) => ({
+    id: fieldId,
+    header: readMcpElicitationFieldLabel(fieldId, field),
+    question:
+      "description" in field && typeof field.description === "string"
+        ? field.description
+        : payload.message,
+    options: mcpElicitationOptions(field),
+    multiSelect: "type" in field && field.type === "array",
+  }));
+}
+
+function normalizeMcpElicitationContent(
+  answers: ProviderUserInputAnswers,
+): Readonly<Record<string, unknown>> {
+  return Object.fromEntries(
+    Object.entries(answers).map(([key, value]) => {
+      if (isCodexUserInputAnswerObject(value)) {
+        return [key, value.answers.length === 1 ? value.answers[0] : value.answers];
+      }
+      return [key, value];
+    }),
+  );
+}
+
 function currentProviderThreadId(session: ProviderSession): string | undefined {
   return readResumeCursorThreadId(session.resumeCursor);
 }
@@ -1257,6 +1347,70 @@ export const makeCodexSessionRuntime = (
 
     yield* client
       .registerServerRequest(
+        "item/permissions/requestApproval",
+        (payload) => payload.threadId === routedProviderThreadId,
+        (payload) =>
+          Effect.gen(function* () {
+            const requestId = ApprovalRequestId.make(
+              yield* randomUUIDv4("command-approval-request"),
+            );
+            const turnId = TurnId.make(payload.turnId);
+            const itemId = ProviderItemId.make(payload.itemId);
+            const decision = yield* Deferred.make<ProviderApprovalDecision>();
+
+            yield* Ref.update(pendingApprovalsRef, (current) => {
+              const next = new Map(current);
+              next.set(requestId, {
+                requestId,
+                jsonRpcId: payload.itemId,
+                requestKind: "permissions",
+                turnId,
+                itemId,
+                decision,
+              });
+              return next;
+            });
+            yield* Ref.update(approvalCorrelationsRef, (current) => {
+              const next = new Map(current);
+              next.set(payload.itemId, {
+                requestId,
+                requestKind: "permissions",
+                turnId,
+                itemId,
+              });
+              return next;
+            });
+            yield* emitEvent({
+              kind: "request",
+              threadId: options.threadId,
+              method: "item/permissions/requestApproval",
+              requestId,
+              requestKind: "permissions",
+              turnId,
+              itemId,
+              payload,
+            });
+
+            const resolved = yield* Deferred.await(decision).pipe(
+              Effect.ensuring(
+                Ref.update(pendingApprovalsRef, (current) => {
+                  const next = new Map(current);
+                  next.delete(requestId);
+                  return next;
+                }),
+              ),
+            );
+            return {
+              permissions:
+                resolved === "accept" || resolved === "acceptForSession" ? payload.permissions : {},
+              scope: resolved === "acceptForSession" ? "session" : "turn",
+            } satisfies EffectCodexSchema.PermissionsRequestApprovalResponse;
+          }),
+      )
+      .pipe(Effect.flatMap((unregister) => Effect.addFinalizer(() => unregister)));
+
+    yield* client
+      .registerServerRequest(
         "item/tool/requestUserInput",
         (payload) => payload.threadId === routedProviderThreadId,
         (payload) =>
@@ -1306,6 +1460,127 @@ export const makeCodexSessionRuntime = (
                 ),
               ),
             } satisfies EffectCodexSchema.ToolRequestUserInputResponse;
+          }),
+      )
+      .pipe(Effect.flatMap((unregister) => Effect.addFinalizer(() => unregister)));
+
+    yield* client
+      .registerServerRequest(
+        "mcpServer/elicitation/request",
+        (payload) => payload.threadId === routedProviderThreadId,
+        (payload) =>
+          Effect.gen(function* () {
+            const requestId = ApprovalRequestId.make(yield* randomUUIDv4("user-input-request"));
+            const turnId = payload.turnId ? TurnId.make(payload.turnId) : undefined;
+            const answers = yield* Deferred.make<ProviderUserInputAnswers>();
+
+            yield* Ref.update(pendingUserInputsRef, (current) => {
+              const next = new Map(current);
+              next.set(requestId, {
+                requestId,
+                turnId,
+                itemId: undefined,
+                answers,
+              });
+              return next;
+            });
+            yield* emitEvent({
+              kind: "request",
+              threadId: options.threadId,
+              method: "mcpServer/elicitation/request",
+              requestId,
+              ...(turnId ? { turnId } : {}),
+              payload,
+            });
+            yield* emitEvent({
+              kind: "request",
+              threadId: options.threadId,
+              method: "item/tool/requestUserInput",
+              requestId,
+              ...(turnId ? { turnId } : {}),
+              payload: {
+                itemId: `mcp-elicitation:${requestId}`,
+                threadId: routedProviderThreadId ?? options.threadId,
+                turnId: payload.turnId ?? `mcp-elicitation:${requestId}`,
+                questions: mcpElicitationQuestions(payload),
+                mcpElicitation: payload,
+              },
+            });
+
+            const resolvedAnswers = yield* Deferred.await(answers).pipe(
+              Effect.ensuring(
+                Ref.update(pendingUserInputsRef, (current) => {
+                  const next = new Map(current);
+                  next.delete(requestId);
+                  return next;
+                }),
+              ),
+            );
+            const content = normalizeMcpElicitationContent(resolvedAnswers);
+            const urlAction =
+              payload.mode === "url" && typeof content.action === "string"
+                ? content.action.toLowerCase()
+                : undefined;
+            const action =
+              Object.keys(content).length === 0
+                ? ("cancel" as const)
+                : urlAction === "decline"
+                  ? ("decline" as const)
+                  : ("accept" as const);
+            yield* emitEvent({
+              kind: "notification",
+              threadId: options.threadId,
+              method: "mcpServer/elicitation/resolved",
+              requestId,
+              ...(turnId ? { turnId } : {}),
+              payload: { action, ...(action === "accept" ? { content } : {}) },
+            });
+            return {
+              action,
+              ...(action === "accept" ? { content } : {}),
+            } satisfies EffectCodexSchema.McpServerElicitationRequestResponse;
+          }),
+      )
+      .pipe(Effect.flatMap((unregister) => Effect.addFinalizer(() => unregister)));
+
+    yield* client
+      .registerServerRequest(
+        "item/tool/call",
+        (payload) => payload.threadId === routedProviderThreadId,
+        (payload) =>
+          Effect.gen(function* () {
+            const requestId = ApprovalRequestId.make(yield* randomUUIDv4("user-input-request"));
+            const turnId = TurnId.make(payload.turnId);
+            yield* emitEvent({
+              kind: "request",
+              threadId: options.threadId,
+              method: "item/tool/call",
+              requestId,
+              turnId,
+              payload,
+            });
+            const key = payload.namespace ? `${payload.namespace}/${payload.tool}` : payload.tool;
+            const handler = options.clientTools?.get(key) ?? options.clientTools?.get(payload.tool);
+            const response = handler
+              ? yield* handler(payload)
+              : {
+                  success: false,
+                  contentItems: [
+                    {
+                      type: "inputText" as const,
+                      text: `No trusted client tool is registered for '${key}'.`,
+                    },
+                  ],
+                };
+            yield* emitEvent({
+              kind: "notification",
+              threadId: options.threadId,
+              method: "item/tool/call/resolved",
+              requestId,
+              turnId,
+              payload: response,
+            });
+            return response;
           }),
       )
       .pipe(Effect.flatMap((unregister) => Effect.addFinalizer(() => unregister)));

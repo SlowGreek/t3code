@@ -15,6 +15,7 @@ import { HostProcessArchitecture, HostProcessPlatform } from "./hostProcess.ts";
 import {
   RelayClientInstallError,
   CLOUDFLARED_VERSION,
+  disabled,
   makeCloudflaredRelayClient,
 } from "./relayClient.ts";
 
@@ -63,6 +64,14 @@ const makeSpawnerLayer = (commands: Array<string>) =>
   );
 
 describe("RelayClient", () => {
+  it.effect("exposes an explicit disabled workplace implementation", () =>
+    Effect.gen(function* () {
+      expect((yield* disabled.resolve).status).toBe("disabled");
+      const error = yield* disabled.install.pipe(Effect.flip);
+      expect(error.reason).toBe("disabled");
+    }),
+  );
+
   it.effect("resolves explicit overrides before managed and PATH executables", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;

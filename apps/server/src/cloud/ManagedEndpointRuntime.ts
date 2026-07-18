@@ -317,3 +317,11 @@ export const make = Effect.gen(function* () {
 });
 
 export const layer = Layer.effect(CloudManagedEndpointRuntime, make);
+
+/** Cloud connector processes are permanently unavailable in workplace builds. */
+export const layerDisabled = Layer.succeed(
+  CloudManagedEndpointRuntime,
+  CloudManagedEndpointRuntime.of({
+    applyConfig: () => Effect.succeed({ status: "disabled" }),
+  }),
+);

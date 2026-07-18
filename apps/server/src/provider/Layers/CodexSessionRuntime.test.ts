@@ -20,6 +20,7 @@ import {
   hasConfiguredMcpServer,
   isTurnSteerUnavailableError,
   isRecoverableThreadResumeError,
+  mcpElicitationQuestions,
   openCodexThread,
 } from "./CodexSessionRuntime.ts";
 const isCodexAppServerRequestError = Schema.is(CodexErrors.CodexAppServerRequestError);
@@ -304,6 +305,66 @@ describe("Codex turn steering", () => {
     });
 
     NodeAssert.equal(activeTurnNotSteerableKind(error), "review");
+  });
+});
+
+describe("MCP elicitation", () => {
+  it("projects mixed form fields into the existing question UI model", () => {
+    const questions = mcpElicitationQuestions({
+      mode: "form",
+      message: "Configure deployment",
+      serverName: "deploy",
+      threadId: "provider-thread-1",
+      requestedSchema: {
+        type: "object",
+        properties: {
+          name: {
+            type: "string",
+            title: "Name",
+            description: "Deployment name",
+          },
+          regions: {
+            type: "array",
+            title: "Regions",
+            items: { type: "string", enum: ["us-east", "eu-west"] },
+          },
+          confirm: {
+            type: "boolean",
+            title: "Confirm",
+          },
+        },
+      },
+    });
+
+    NodeAssert.deepStrictEqual(questions, [
+      {
+        id: "name",
+        header: "Name",
+        question: "Deployment name",
+        options: [],
+        multiSelect: false,
+      },
+      {
+        id: "regions",
+        header: "Regions",
+        question: "Configure deployment",
+        options: [
+          { label: "us-east", description: "us-east" },
+          { label: "eu-west", description: "eu-west" },
+        ],
+        multiSelect: true,
+      },
+      {
+        id: "confirm",
+        header: "Confirm",
+        question: "Configure deployment",
+        options: [
+          { label: "Yes", description: "Yes" },
+          { label: "No", description: "No" },
+        ],
+        multiSelect: false,
+      },
+    ]);
   });
 });
 

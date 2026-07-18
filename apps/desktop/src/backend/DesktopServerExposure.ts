@@ -313,7 +313,7 @@ function runtimeStateFromResolvedExposure(input: {
     httpBaseUrl: new URL(input.exposure.localHttpUrl),
     endpointUrl: Option.fromNullishOr(input.exposure.endpointUrl),
     advertisedHost: Option.fromNullishOr(input.exposure.advertisedHost),
-    tailscaleServeEnabled: input.settings.tailscaleServeEnabled,
+    tailscaleServeEnabled: false,
     tailscaleServePort: input.settings.tailscaleServePort,
   };
 }
@@ -447,16 +447,21 @@ export const make = Effect.gen(function* () {
         enabled: input.enabled,
         ...(input.port === undefined ? {} : { port: input.port }),
       });
+      if (input.enabled) {
+        yield* Effect.logWarning(
+          "Tailscale Serve is disabled because workplace backends are loopback-only.",
+        );
+      }
       const result = yield* desktopSettings
         .setTailscaleServe({
-          enabled: input.enabled,
+          enabled: false,
           port: Option.fromNullishOr(input.port),
         })
         .pipe(
           Effect.mapError(
             (cause) =>
               new DesktopTailscaleServePersistenceError({
-                enabled: input.enabled,
+                enabled: false,
                 port: input.port ?? null,
                 cause,
               }),

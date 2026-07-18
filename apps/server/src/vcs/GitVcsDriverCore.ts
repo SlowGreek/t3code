@@ -40,6 +40,19 @@ import { ServerConfig } from "../config.ts";
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 1_000_000;
 const OUTPUT_TRUNCATED_MARKER = "\n\n[truncated]";
+const WORKTREE_INCLUDE_FILE = ".worktreeinclude";
+const WORKTREE_ALWAYS_COPY_FILES = ["AGENTS.override.md"] as const;
+
+export function parseWorktreeIncludeFile(content: string): ReadonlyArray<string> {
+  return [
+    ...new Set(
+      content
+        .split(/\r?\n/u)
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0 && !line.startsWith("#")),
+    ),
+  ];
+}
 const PREPARED_COMMIT_PATCH_MAX_OUTPUT_BYTES = 49_000;
 const RANGE_COMMIT_SUMMARY_MAX_OUTPUT_BYTES = 19_000;
 const RANGE_DIFF_SUMMARY_MAX_OUTPUT_BYTES = 19_000;
@@ -2271,6 +2284,83 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     yield* executeGit("GitVcsDriver.createWorktree", input.cwd, args, {
       fallbackErrorDetail: "git worktree add failed",
     });
+
+    const fileOperationError = (operation: string, detail: string, cause: unknown) =>
+      new GitCommandError({
+        operation,
+        command: "copy-worktree-includes",
+        cwd: input.cwd,
+        detail,
+        cause,
+      });
+    const readOptionalFile = (filePath: string) =>
+      fileSystem.readFileString(filePath, "utf8").pipe(
+        Effect.map(Option.some),
+        Effect.catch((cause) =>
+          cause.reason._tag === "NotFound"
+            ? Effect.succeed(Option.none<string>())
+            : Effect.fail(
+                fileOperationError(
+                  "GitVcsDriver.createWorktree.readIncludes",
+                  `Failed to read optional worktree include file '${filePath}'.`,
+                  cause,
+                ),
+              ),
+        ),
+      );
+    const includeFile = yield* readOptionalFile(path.join(input.cwd, WORKTREE_INCLUDE_FILE));
+    const includedPaths = new Set([
+      ...WORKTREE_ALWAYS_COPY_FILES,
+      ...(Option.isSome(includeFile) ? parseWorktreeIncludeFile(includeFile.value) : []),
+    ]);
+
+    for (const includedPath of includedPaths) {
+      const pathSegments = includedPath.split(/[\\/]/u);
+      if (
+        path.isAbsolute(includedPath) ||
+        pathSegments.includes("..") ||
+        pathSegments.every((segment) => segment === "" || segment === ".")
+      ) {
+        return yield* fileOperationError(
+          "GitVcsDriver.createWorktree.validateIncludes",
+          `Worktree include path must be repository-relative: '${includedPath}'.`,
+          new Error("Invalid worktree include path."),
+        );
+      }
+
+      const sourcePath = path.join(input.cwd, includedPath);
+      const sourceInfo = yield* fileSystem.stat(sourcePath).pipe(
+        Effect.map(Option.some),
+        Effect.catch((cause) =>
+          cause.reason._tag === "NotFound"
+            ? Effect.succeed(Option.none<FileSystem.File.Info>())
+            : Effect.fail(
+                fileOperationError(
+                  "GitVcsDriver.createWorktree.inspectInclude",
+                  `Failed to inspect worktree include '${includedPath}'.`,
+                  cause,
+                ),
+              ),
+        ),
+      );
+      if (Option.isNone(sourceInfo)) continue;
+
+      const targetPath = path.join(worktreePath, includedPath);
+      yield* fileSystem.makeDirectory(path.dirname(targetPath), { recursive: true }).pipe(
+        Effect.andThen(
+          sourceInfo.value.type === "Directory"
+            ? fileSystem.copy(sourcePath, targetPath, { overwrite: true })
+            : fileSystem.copyFile(sourcePath, targetPath),
+        ),
+        Effect.mapError((cause) =>
+          fileOperationError(
+            "GitVcsDriver.createWorktree.copyInclude",
+            `Failed to copy worktree include '${includedPath}'.`,
+            cause,
+          ),
+        ),
+      );
+    }
 
     if (input.newRefName && input.baseRefName) {
       const remoteNames = yield* listRemoteNames(input.cwd).pipe(Effect.orElseSucceed(() => []));

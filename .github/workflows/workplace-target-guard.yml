@@ -1,0 +1,22 @@
+name: Workplace target guard
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  require-workplace-target:
+    if: github.repository == 'SlowGreek/t3code'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require codex-workplace base
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          if [ "$BASE_REF" != "codex-workplace" ]; then
+            echo "::error::Fork product changes must target codex-workplace, not $BASE_REF."
+            exit 1
+          fi

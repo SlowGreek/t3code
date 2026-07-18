@@ -17,6 +17,8 @@
     "icons:export": "node scripts/export-brand-icons.ts",
     "icons:check": "node scripts/export-brand-icons.ts --check",
     "build": "vp run --filter './apps/*' --filter './packages/*' --filter './oxlint-plugin-t3code' --filter './scripts' build",
+    "build:reproducible": "node scripts/reproducible-build.ts",
+    "sbom": "pnpm sbom --sbom-format spdx --lockfile-only --prod --out dist/sbom.spdx.json",
     "build:marketing": "vp run --filter @t3tools/marketing build",
     "build:desktop": "vp run --filter @t3tools/desktop --filter t3 build",
     "typecheck": "vp run -r --concurrency-limit 2 typecheck",

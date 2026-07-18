@@ -80,6 +80,17 @@ function makeHandle(input: {
 }
 
 describe("CloudManagedEndpointRuntime", () => {
+  it.effect("keeps the workplace layer disabled for every persisted connector config", () =>
+    Effect.gen(function* () {
+      const runtime = yield* ManagedEndpointRuntime.CloudManagedEndpointRuntime;
+      const status = yield* runtime.applyConfig({
+        providerKind: "cloudflare_tunnel",
+        connectorToken: "ignored",
+      });
+      expect(status).toEqual({ status: "disabled" });
+    }).pipe(Effect.provide(ManagedEndpointRuntime.layerDisabled)),
+  );
+
   it("classifies Cloudflare connection and warning output", () => {
     expect(
       ManagedEndpointRuntime.classifyRelayClientOutput(

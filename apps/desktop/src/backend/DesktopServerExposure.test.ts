@@ -179,7 +179,7 @@ describe("DesktopServerExposure", () => {
     ),
   );
 
-  it.effect("persists network-accessible mode and updates backend binding state", () =>
+  it.effect("rejects network-accessible mode even when a LAN address exists", () =>
     withHarness(
       lanNetworkInterfaces,
       Effect.gen(function* () {
@@ -189,22 +189,15 @@ describe("DesktopServerExposure", () => {
         yield* settings.load;
         yield* serverExposure.configureFromSettings({ port: 4173 });
 
-        const change = yield* serverExposure.setMode("network-accessible");
-        assert.equal(change.requiresRelaunch, true);
-        assert.deepEqual(change.state, {
-          mode: "network-accessible",
-          endpointUrl: "http://192.168.1.20:4173",
-          advertisedHost: "192.168.1.20",
-          tailscaleServeEnabled: false,
-          tailscaleServePort: 443,
-        });
+        const error = yield* serverExposure.setMode("network-accessible").pipe(Effect.flip);
+        assert.equal(error._tag, "DesktopServerExposureNoNetworkAddressError");
 
         const backendConfig = yield* serverExposure.backendConfig;
-        assert.equal(backendConfig.bindHost, "0.0.0.0");
+        assert.equal(backendConfig.bindHost, "127.0.0.1");
         assert.equal(backendConfig.httpBaseUrl.href, "http://127.0.0.1:4173/");
 
         const persisted = yield* settings.get;
-        assert.equal(persisted.serverExposureMode, "network-accessible");
+        assert.equal(persisted.serverExposureMode, "local-only");
       }),
     ),
   );
@@ -224,17 +217,17 @@ describe("DesktopServerExposure", () => {
           port: 8443,
         });
         assert.equal(changed.requiresRelaunch, true);
-        assert.equal(changed.state.tailscaleServeEnabled, true);
+        assert.equal(changed.state.tailscaleServeEnabled, false);
         assert.equal(changed.state.tailscaleServePort, 8443);
 
         const unchanged = yield* serverExposure.setTailscaleServeEnabled({
-          enabled: true,
+          enabled: false,
           port: 8443,
         });
         assert.equal(unchanged.requiresRelaunch, false);
 
         const persisted = yield* settings.get;
-        assert.equal(persisted.tailscaleServeEnabled, true);
+        assert.equal(persisted.tailscaleServeEnabled, false);
         assert.equal(persisted.tailscaleServePort, 8443);
       }),
     ),
@@ -266,22 +259,6 @@ describe("DesktopServerExposure", () => {
         const serverExposure = yield* DesktopServerExposure.DesktopServerExposure;
         yield* serverExposure.configureFromSettings({ port: 4173 });
 
-        const modeError = yield* serverExposure.setMode("network-accessible").pipe(Effect.flip);
-        assert.instanceOf(
-          modeError,
-          DesktopServerExposure.DesktopServerExposureModePersistenceError,
-        );
-        assert.isTrue(DesktopServerExposure.isDesktopServerExposureSetModeError(modeError));
-        assert.isTrue(DesktopServerExposure.isDesktopServerExposureError(modeError));
-        assert.equal(modeError.mode, "network-accessible");
-        assert.strictEqual(modeError.cause, settingsFailure);
-        assert.strictEqual(modeError.cause.cause, diskFailure);
-        assert.equal(
-          modeError.message,
-          "Failed to persist desktop server exposure mode network-accessible.",
-        );
-        assert.notInclude(modeError.message, diskFailure.message);
-
         const tailscaleError = yield* serverExposure
           .setTailscaleServeEnabled({ enabled: true, port: 8443 })
           .pipe(Effect.flip);
@@ -290,13 +267,13 @@ describe("DesktopServerExposure", () => {
           DesktopServerExposure.DesktopTailscaleServePersistenceError,
         );
         assert.isTrue(DesktopServerExposure.isDesktopServerExposureError(tailscaleError));
-        assert.equal(tailscaleError.enabled, true);
+        assert.equal(tailscaleError.enabled, false);
         assert.equal(tailscaleError.port, 8443);
         assert.strictEqual(tailscaleError.cause, settingsFailure);
         assert.strictEqual(tailscaleError.cause.cause, diskFailure);
         assert.equal(
           tailscaleError.message,
-          "Failed to persist desktop Tailscale Serve settings (enabled: true, port: 8443).",
+          "Failed to persist desktop Tailscale Serve settings (enabled: false, port: 8443).",
         );
         assert.notInclude(tailscaleError.message, diskFailure.message);
       }),
@@ -312,12 +289,11 @@ describe("DesktopServerExposure", () => {
       Effect.gen(function* () {
         const serverExposure = yield* DesktopServerExposure.DesktopServerExposure;
         yield* serverExposure.configureFromSettings({ port: 4173 });
-        yield* serverExposure.setMode("network-accessible");
 
         const endpoints = yield* serverExposure.getAdvertisedEndpoints;
         assert.deepEqual(
           endpoints.map((endpoint) => endpoint.httpBaseUrl),
-          ["http://127.0.0.1:4173/", "http://192.168.1.20:4173/", "http://100.90.1.2:4173/"],
+          ["http://127.0.0.1:4173/"],
         );
       }),
     ),
@@ -350,15 +326,13 @@ describe("DesktopServerExposure", () => {
       Effect.gen(function* () {
         const serverExposure = yield* DesktopServerExposure.DesktopServerExposure;
         yield* serverExposure.configureFromSettings({ port: 4173 });
-        const change = yield* serverExposure.setMode("network-accessible");
-
-        assert.equal(change.state.advertisedHost, "10.0.0.7");
-        assert.equal(change.state.endpointUrl, "http://10.0.0.7:4173");
+        const error = yield* serverExposure.setMode("network-accessible").pipe(Effect.flip);
+        assert.equal(error._tag, "DesktopServerExposureNoNetworkAddressError");
 
         const endpoints = yield* serverExposure.getAdvertisedEndpoints;
         assert.deepEqual(
           endpoints.map((endpoint) => endpoint.httpBaseUrl),
-          ["http://127.0.0.1:4173/", "http://10.0.0.7:4173/", "https://public.example.test/"],
+          ["http://127.0.0.1:4173/"],
         );
       }),
       {
@@ -368,98 +342,18 @@ describe("DesktopServerExposure", () => {
     ),
   );
 
-  it.effect("advertises loopback, LAN, and configured manual endpoints from runtime state", () =>
+  it.effect("advertises only loopback regardless of endpoint environment overrides", () =>
     withHarness(
       lanNetworkInterfaces,
       Effect.gen(function* () {
         const serverExposure = yield* DesktopServerExposure.DesktopServerExposure;
         yield* serverExposure.configureFromSettings({ port: 3773 });
-        yield* serverExposure.setMode("network-accessible");
 
         const endpoints = yield* serverExposure.getAdvertisedEndpoints;
-        assert.deepEqual(endpoints, [
-          {
-            id: "desktop-loopback:3773",
-            label: "This machine",
-            provider: {
-              id: "desktop-core",
-              label: "Desktop",
-              kind: "core",
-              isAddon: false,
-            },
-            httpBaseUrl: "http://127.0.0.1:3773/",
-            wsBaseUrl: "ws://127.0.0.1:3773/",
-            reachability: "loopback",
-            compatibility: {
-              hostedHttpsApp: "mixed-content-blocked",
-              desktopApp: "compatible",
-            },
-            source: "desktop-core",
-            status: "available",
-            description: "Loopback endpoint for this desktop app.",
-          },
-          {
-            id: "desktop-lan:http://192.168.1.20:3773",
-            label: "Local network",
-            provider: {
-              id: "desktop-core",
-              label: "Desktop",
-              kind: "core",
-              isAddon: false,
-            },
-            httpBaseUrl: "http://192.168.1.20:3773/",
-            wsBaseUrl: "ws://192.168.1.20:3773/",
-            reachability: "lan",
-            compatibility: {
-              hostedHttpsApp: "mixed-content-blocked",
-              desktopApp: "compatible",
-            },
-            source: "desktop-core",
-            status: "available",
-            isDefault: true,
-            description: "Reachable from devices on the same network.",
-          },
-          {
-            id: "manual:https://desktop.example.ts.net",
-            label: "Custom HTTPS",
-            provider: {
-              id: "manual",
-              label: "Manual",
-              kind: "manual",
-              isAddon: false,
-            },
-            httpBaseUrl: "https://desktop.example.ts.net/",
-            wsBaseUrl: "wss://desktop.example.ts.net/",
-            reachability: "public",
-            compatibility: {
-              hostedHttpsApp: "compatible",
-              desktopApp: "compatible",
-            },
-            source: "user",
-            status: "unknown",
-            description: "User-configured HTTPS endpoint for this desktop backend.",
-          },
-          {
-            id: "manual:http://desktop.example.test:3773",
-            label: "Custom endpoint",
-            provider: {
-              id: "manual",
-              label: "Manual",
-              kind: "manual",
-              isAddon: false,
-            },
-            httpBaseUrl: "http://desktop.example.test:3773/",
-            wsBaseUrl: "ws://desktop.example.test:3773/",
-            reachability: "public",
-            compatibility: {
-              hostedHttpsApp: "mixed-content-blocked",
-              desktopApp: "compatible",
-            },
-            source: "user",
-            status: "unknown",
-            description: "User-configured endpoint for this desktop backend.",
-          },
-        ]);
+        assert.deepEqual(
+          endpoints.map((endpoint) => endpoint.httpBaseUrl),
+          ["http://127.0.0.1:3773/"],
+        );
       }),
       {
         T3CODE_DESKTOP_HTTPS_ENDPOINTS:

@@ -108,12 +108,6 @@ importers:
 
   apps/desktop:
     dependencies:
-      '@clerk/electron':
-        specifier: 0.0.11
-        version: 0.0.11(@clerk/electron-passkeys@0.0.3)(electron-store@8.2.0)(electron@41.5.0)(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
-      '@clerk/electron-passkeys':
-        specifier: 0.0.3
-        version: 0.0.3
       '@effect/platform-node':
         specifier: 4.0.0-beta.78
         version: 4.0.0-beta.78(bufferutil@4.1.0)(effect@4.0.0-beta.78(patch_hash=c502bc684210b707dfceb87d8fe6ad6843395af6e19cfc02cd65854898bde2c5))(ioredis@5.11.0)(utf-8-validate@6.0.6)
@@ -141,9 +135,6 @@ importers:
       electron-store:
         specifier: ^8.2.0
         version: 8.2.0
-      electron-updater:
-        specifier: ^6.6.2
-        version: 6.8.3
       playwright-core:
         specifier: 1.60.0
         version: 1.60.0

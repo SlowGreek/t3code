@@ -85,6 +85,8 @@ function formatRelayClientStatus(executable: RelayClient.RelayClientStatus): Rea
     }
     case "missing":
       return ["  Relay client: not installed"];
+    case "disabled":
+      return ["  Relay client: disabled by workplace security policy"];
     case "unsupported":
       return [
         `  Relay client: unsupported on ${executable.platform}-${executable.arch}`,

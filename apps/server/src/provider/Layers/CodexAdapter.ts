@@ -307,6 +307,8 @@ function toRequestTypeFromMethod(method: string): CanonicalRequestType {
       return "apply_patch_approval";
     case "execCommandApproval":
       return "exec_command_approval";
+    case "item/permissions/requestApproval":
+      return "permissions_approval";
     case "item/tool/requestUserInput":
       return "tool_user_input";
     case "item/tool/call":
@@ -326,6 +328,8 @@ function toRequestTypeFromKind(kind: ProviderRequestKind | undefined): Canonical
       return "file_read_approval";
     case "file-change":
       return "file_change_approval";
+    case "permissions":
+      return "permissions_approval";
     default:
       return "unknown";
   }
