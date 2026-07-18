@@ -2132,6 +2132,36 @@ export const makeCodexSessionRuntime = (
                 })),
               };
             }
+            case "threadLifecycle": {
+              switch (operation.action.type) {
+                case "archive":
+                  yield* client.request("thread/archive", {
+                    threadId: operation.providerThreadId,
+                  });
+                  break;
+                case "unarchive":
+                  yield* client.request("thread/unarchive", {
+                    threadId: operation.providerThreadId,
+                  });
+                  break;
+                case "delete":
+                  yield* client.request("thread/delete", {
+                    threadId: operation.providerThreadId,
+                  });
+                  break;
+                case "name":
+                  yield* client.request("thread/name/set", {
+                    threadId: operation.providerThreadId,
+                    name: operation.action.name,
+                  });
+                  break;
+              }
+              return {
+                type: "threadLifecycle",
+                providerThreadId: operation.providerThreadId,
+                action: operation.action.type,
+              };
+            }
           }
         }),
       respondToRequest: (requestId, decision) =>

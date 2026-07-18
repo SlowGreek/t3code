@@ -76,6 +76,19 @@ export const CodexMcpOperation = Schema.Union([
     searchTerm: Schema.optional(Schema.String),
     archived: Schema.optional(Schema.Boolean),
   }),
+  Schema.Struct({
+    type: Schema.Literal("threadLifecycle"),
+    providerThreadId: Schema.String,
+    action: Schema.Union([
+      Schema.Struct({ type: Schema.Literal("archive") }),
+      Schema.Struct({ type: Schema.Literal("unarchive") }),
+      Schema.Struct({ type: Schema.Literal("delete") }),
+      Schema.Struct({
+        type: Schema.Literal("name"),
+        name: Schema.String,
+      }),
+    ]),
+  }),
 ]);
 export type CodexMcpOperation = typeof CodexMcpOperation.Type;
 
@@ -128,6 +141,11 @@ export const CodexMcpResult = Schema.Union([
         archived: Schema.Boolean,
       }),
     ),
+  }),
+  Schema.Struct({
+    type: Schema.Literal("threadLifecycle"),
+    providerThreadId: Schema.String,
+    action: Schema.Literals(["archive", "unarchive", "delete", "name"]),
   }),
 ]);
 export type CodexMcpResult = typeof CodexMcpResult.Type;

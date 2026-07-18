@@ -56,6 +56,10 @@ export function CodexThreadBrowserDialog({
   const [threads, setThreads] = useState<ReadonlyArray<NativeThread>>([]);
   const [busy, setBusy] = useState(false);
   const [importingId, setImportingId] = useState<string | null>(null);
+  const [mutatingId, setMutatingId] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editName, setEditName] = useState("");
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(
@@ -89,11 +93,50 @@ export function CodexThreadBrowserDialog({
     [environmentId, instanceId, request, threadId],
   );
 
+  const mutateThread = useCallback(
+    async (
+      providerThreadId: string,
+      action:
+        | { readonly type: "archive" | "unarchive" | "delete" }
+        | { readonly type: "name"; readonly name: string },
+    ) => {
+      setMutatingId(providerThreadId);
+      setError(null);
+      const response = await request({
+        environmentId,
+        input: {
+          instanceId,
+          threadId,
+          operation: {
+            type: "threadLifecycle",
+            providerThreadId,
+            action,
+          },
+        },
+      });
+      setMutatingId(null);
+      if (response._tag === "Failure") {
+        if (!isAtomCommandInterrupted(response)) {
+          const cause = squashAtomCommandFailure(response);
+          setError(cause instanceof Error ? cause.message : String(cause));
+        }
+        return;
+      }
+      setEditingId(null);
+      setDeleteConfirmId(null);
+      await load({ searchTerm, archived });
+    },
+    [archived, environmentId, instanceId, load, request, searchTerm, threadId],
+  );
+
   useEffect(() => {
     if (!open) return;
     setSearchTerm("");
     setArchived(false);
     setImportingId(null);
+    setMutatingId(null);
+    setEditingId(null);
+    setDeleteConfirmId(null);
     void load({ searchTerm: "", archived: false });
   }, [load, open]);
 
@@ -152,38 +195,116 @@ export function CodexThreadBrowserDialog({
               threads.map((thread) => {
                 const linked = linkedProviderThreadIds.has(thread.providerThreadId);
                 return (
-                  <div
-                    key={thread.providerThreadId}
-                    className="flex items-start justify-between gap-4 rounded-lg border p-3"
-                  >
-                    <div className="min-w-0">
-                      <div className="truncate text-sm font-medium">
-                        {nativeThreadTitle(thread)}
+                  <div key={thread.providerThreadId} className="rounded-lg border p-3">
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-medium">
+                          {nativeThreadTitle(thread)}
+                        </div>
+                        <div className="mt-1 truncate text-xs text-muted-foreground">
+                          {thread.cwd}
+                        </div>
                       </div>
-                      <div className="mt-1 truncate text-xs text-muted-foreground">
-                        {thread.cwd}
+                      <div className="flex shrink-0 flex-wrap justify-end gap-1">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={linked || busy || importingId !== null || mutatingId !== null}
+                          onClick={() => {
+                            setImportingId(thread.providerThreadId);
+                            void onImport(thread)
+                              .then(() => onOpenChange(false))
+                              .catch((cause: unknown) => {
+                                setError(cause instanceof Error ? cause.message : String(cause));
+                              })
+                              .finally(() => setImportingId(null));
+                          }}
+                        >
+                          {linked
+                            ? "Linked"
+                            : importingId === thread.providerThreadId
+                              ? "Linking..."
+                              : "Link"}
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          disabled={mutatingId !== null}
+                          onClick={() =>
+                            void mutateThread(thread.providerThreadId, {
+                              type: archived ? "unarchive" : "archive",
+                            })
+                          }
+                        >
+                          {archived ? "Unarchive" : "Archive"}
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          disabled={mutatingId !== null}
+                          onClick={() => {
+                            setEditingId(thread.providerThreadId);
+                            setEditName(nativeThreadTitle(thread));
+                            setDeleteConfirmId(null);
+                          }}
+                        >
+                          Rename
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant={
+                            deleteConfirmId === thread.providerThreadId ? "destructive" : "ghost"
+                          }
+                          disabled={mutatingId !== null}
+                          onClick={() => {
+                            if (deleteConfirmId === thread.providerThreadId) {
+                              void mutateThread(thread.providerThreadId, { type: "delete" });
+                              return;
+                            }
+                            setDeleteConfirmId(thread.providerThreadId);
+                            setEditingId(null);
+                          }}
+                        >
+                          {deleteConfirmId === thread.providerThreadId
+                            ? "Confirm delete"
+                            : "Delete"}
+                        </Button>
                       </div>
                     </div>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={linked || busy || importingId !== null}
-                      onClick={() => {
-                        setImportingId(thread.providerThreadId);
-                        void onImport(thread)
-                          .then(() => onOpenChange(false))
-                          .catch((cause: unknown) => {
-                            setError(cause instanceof Error ? cause.message : String(cause));
-                          })
-                          .finally(() => setImportingId(null));
-                      }}
-                    >
-                      {linked
-                        ? "Linked"
-                        : importingId === thread.providerThreadId
-                          ? "Linking..."
-                          : "Link"}
-                    </Button>
+                    {editingId === thread.providerThreadId ? (
+                      <form
+                        className="mt-3 flex gap-2"
+                        onSubmit={(event) => {
+                          event.preventDefault();
+                          const name = editName.trim();
+                          if (name) {
+                            void mutateThread(thread.providerThreadId, { type: "name", name });
+                          }
+                        }}
+                      >
+                        <Input
+                          autoFocus
+                          aria-label="Native thread name"
+                          value={editName}
+                          onChange={(event) => setEditName(event.currentTarget.value)}
+                        />
+                        <Button
+                          type="submit"
+                          size="sm"
+                          disabled={!editName.trim() || mutatingId !== null}
+                        >
+                          Save
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => setEditingId(null)}
+                        >
+                          Cancel
+                        </Button>
+                      </form>
+                    ) : null}
                   </div>
                 );
               })
