@@ -8,6 +8,8 @@
  * @module ProviderAdapter
  */
 import type {
+  CodexMcpOperation,
+  CodexMcpResult,
   ApprovalRequestId,
   ProviderApprovalDecision,
   ProviderDriverKind,
@@ -135,6 +137,12 @@ export interface ProviderAdapterShape<TError> {
     threadId: ThreadId,
     action: ProviderThreadLifecycleAction,
   ) => Effect.Effect<void, TError>;
+
+  /** Native Codex MCP management, present only on Codex adapters. */
+  readonly manageCodexMcp?: (
+    threadId: ThreadId,
+    operation: CodexMcpOperation,
+  ) => Effect.Effect<CodexMcpResult, TError>;
 
   /**
    * Stop all sessions owned by this adapter.

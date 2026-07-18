@@ -9,7 +9,7 @@ import {
 import {
   DEFAULT_MODEL,
   type DesktopWslState,
-  type EnvironmentId,
+  EnvironmentId,
   type FilesystemBrowseResult,
   type ProjectId,
   ProviderInstanceId,
@@ -113,9 +113,11 @@ import { resolveEnvironmentOptionLabel } from "./BranchToolbar.logic";
 import { CommandPaletteResults } from "./CommandPaletteResults";
 import { AzureDevOpsIcon, BitbucketIcon, GitHubIcon, GitLabIcon } from "./Icons";
 import { ProjectFavicon } from "./ProjectFavicon";
+import { CodexMcpDialog } from "./CodexMcpDialog";
 import { ReviewStartDialog } from "./ReviewStartDialog";
 import { ThreadRowLeadingStatus, ThreadRowTrailingStatus } from "./ThreadStatusIndicators";
 import { primaryServerKeybindingsAtom } from "../state/server";
+import { serverEnvironment } from "../state/server";
 import { resolveShortcutCommand } from "../keybindings";
 import {
   Command,
@@ -477,6 +479,12 @@ function OpenCommandPaletteDialog(props: {
   const primaryEnvironment = usePrimaryEnvironment();
   const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread } =
     useHandleNewThread();
+  const environmentProviders =
+    useAtomValue(
+      serverEnvironment.providersValueAtom(
+        activeThread?.environmentId ?? EnvironmentId.make(PRIMARY_LOCAL_ENVIRONMENT_ID),
+      ),
+    ) ?? [];
   const { compactThread, startReview } = useThreadActions();
   const projects = useProjects();
   const threads = useThreadShells();
@@ -492,6 +500,7 @@ function OpenCommandPaletteDialog(props: {
   const [isRemoteProjectLookingUp, setIsRemoteProjectLookingUp] = useState(false);
   const [isRemoteProjectCloning, setIsRemoteProjectCloning] = useState(false);
   const [reviewDialogOpen, setReviewDialogOpen] = useState(false);
+  const [codexMcpDialogOpen, setCodexMcpDialogOpen] = useState(false);
   const primaryEnvironmentId = primaryEnvironment?.environmentId ?? null;
 
   const addProjectEnvironmentOptions = useMemo(() => {
@@ -1063,6 +1072,24 @@ function OpenCommandPaletteDialog(props: {
         await compactThread(scopeThreadRef(activeThread.environmentId, activeThread.id));
       },
     });
+    const activeProvider = environmentProviders.find(
+      (provider) => provider.instanceId === activeThread.modelSelection.instanceId,
+    );
+    if (activeProvider?.driver === "codex") {
+      actionItems.push({
+        kind: "action",
+        value: "action:codex-mcp",
+        searchTerms: ["codex", "mcp", "servers", "tools", "resources", "oauth", "diagnostics"],
+        title: "Manage Codex MCP servers...",
+        description: "Inspect status, authenticate, invoke tools, read resources, and reload.",
+        icon: <SettingsIcon className={ITEM_ICON_CLASS} />,
+        keepOpen: true,
+        run: () => {
+          setCodexMcpDialogOpen(true);
+          return Promise.resolve();
+        },
+      });
+    }
     actionItems.push({
       kind: "action",
       value: "action:start-review",
@@ -1923,14 +1950,23 @@ function OpenCommandPaletteDialog(props: {
         </Command>
       </CommandDialogPopup>
       {activeThread ? (
-        <ReviewStartDialog
-          open={reviewDialogOpen}
-          onOpenChange={setReviewDialogOpen}
-          onStart={async (input) => {
-            await startReview(scopeThreadRef(activeThread.environmentId, activeThread.id), input);
-            setOpen(false);
-          }}
-        />
+        <>
+          <ReviewStartDialog
+            open={reviewDialogOpen}
+            onOpenChange={setReviewDialogOpen}
+            onStart={async (input) => {
+              await startReview(scopeThreadRef(activeThread.environmentId, activeThread.id), input);
+              setOpen(false);
+            }}
+          />
+          <CodexMcpDialog
+            open={codexMcpDialogOpen}
+            environmentId={activeThread.environmentId}
+            instanceId={activeThread.modelSelection.instanceId}
+            threadId={activeThread.id}
+            onOpenChange={setCodexMcpDialogOpen}
+          />
+        </>
       ) : null}
     </>
   );

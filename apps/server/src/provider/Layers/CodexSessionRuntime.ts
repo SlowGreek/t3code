@@ -1,5 +1,7 @@
 import {
   ApprovalRequestId,
+  type CodexMcpOperation,
+  type CodexMcpResult,
   DEFAULT_MODEL,
   EventId,
   ProviderDriverKind,
@@ -181,6 +183,9 @@ export interface CodexSessionRuntimeShape {
           readonly target: EffectCodexSchema.V2ReviewStartParams__ReviewTarget;
         },
   ) => Effect.Effect<void, CodexSessionRuntimeError>;
+  readonly manageMcp: (
+    operation: CodexMcpOperation,
+  ) => Effect.Effect<CodexMcpResult, CodexSessionRuntimeError>;
   readonly respondToRequest: (
     requestId: ApprovalRequestId,
     decision: ProviderApprovalDecision,
@@ -2000,6 +2005,94 @@ export const makeCodexSessionRuntime = (
                 target: action.target,
               });
               return;
+          }
+        }),
+      manageMcp: (operation) =>
+        Effect.gen(function* () {
+          const threadId = yield* readProviderThreadId;
+          switch (operation.type) {
+            case "status": {
+              const response = yield* client.request("mcpServerStatus/list", {
+                threadId,
+                detail: "full",
+              });
+              return {
+                type: "status",
+                servers: response.data.map((server) => ({
+                  name: server.name,
+                  authStatus: server.authStatus,
+                  ...(server.serverInfo !== undefined ? { serverInfo: server.serverInfo } : {}),
+                  tools: Object.values(server.tools),
+                  resources: server.resources,
+                  resourceTemplates: server.resourceTemplates,
+                })),
+              };
+            }
+            case "oauth": {
+              const response = yield* client.request("mcpServer/oauth/login", {
+                name: operation.server,
+              });
+              return {
+                type: "oauth",
+                server: operation.server,
+                authorizationUrl: response.authorizationUrl,
+              };
+            }
+            case "resourceRead": {
+              const response = yield* client.request("mcpServer/resource/read", {
+                threadId,
+                server: operation.server,
+                uri: operation.uri,
+              });
+              return {
+                type: "resourceRead",
+                server: operation.server,
+                uri: operation.uri,
+                contents: response.contents,
+              };
+            }
+            case "toolCall": {
+              const response = yield* client.request("mcpServer/tool/call", {
+                threadId,
+                server: operation.server,
+                tool: operation.tool,
+                ...(operation.arguments !== undefined ? { arguments: operation.arguments } : {}),
+              });
+              return {
+                type: "toolCall",
+                server: operation.server,
+                tool: operation.tool,
+                content: response.content,
+                ...(response.isError !== undefined && response.isError !== null
+                  ? { isError: response.isError }
+                  : {}),
+                ...(response.structuredContent !== undefined
+                  ? { structuredContent: response.structuredContent }
+                  : {}),
+              };
+            }
+            case "reload":
+              yield* client.request("config/mcpServer/reload", undefined);
+              return { type: "reload" };
+            case "setEnabled": {
+              if (!/^[A-Za-z0-9_-]+$/.test(operation.server)) {
+                return yield* CodexErrors.CodexAppServerRequestError.invalidParams(
+                  "MCP server names used in config paths may contain only letters, numbers, underscores, and hyphens.",
+                  { server: operation.server },
+                );
+              }
+              yield* client.request("config/value/write", {
+                keyPath: `mcp_servers.${operation.server}.enabled`,
+                value: operation.enabled,
+                mergeStrategy: "replace",
+              });
+              yield* client.request("config/mcpServer/reload", undefined);
+              return {
+                type: "setEnabled",
+                server: operation.server,
+                enabled: operation.enabled,
+              };
+            }
           }
         }),
       respondToRequest: (requestId, decision) =>

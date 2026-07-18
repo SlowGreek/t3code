@@ -151,6 +151,10 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
     return Effect.promise(() => this.syncThreadLifecycleImpl(action));
   }
 
+  manageMcp(_operation: Parameters<CodexSessionRuntimeShape["manageMcp"]>[0]) {
+    return Effect.die("unused");
+  }
+
   respondToRequest(requestId: ApprovalRequestId, decision: ProviderApprovalDecision) {
     return Effect.promise(() => this.respondToRequestImpl(requestId, decision));
   }

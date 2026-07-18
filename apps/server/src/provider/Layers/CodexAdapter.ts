@@ -1705,6 +1705,16 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       ),
     );
 
+  const manageCodexMcp: NonNullable<CodexAdapterShape["manageCodexMcp"]> = (threadId, operation) =>
+    requireSession(threadId).pipe(
+      Effect.flatMap((session) => session.runtime.manageMcp(operation)),
+      Effect.mapError((cause) =>
+        cause._tag === "ProviderAdapterSessionNotFoundError"
+          ? cause
+          : mapCodexRuntimeError(threadId, `mcp/${operation.type}`, cause),
+      ),
+    );
+
   const respondToRequest: CodexAdapterShape["respondToRequest"] = (threadId, requestId, decision) =>
     requireSession(threadId).pipe(
       Effect.flatMap((session) => session.runtime.respondToRequest(requestId, decision)),
@@ -1794,6 +1804,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     readThread,
     rollbackThread,
     syncThreadLifecycle,
+    manageCodexMcp,
     respondToRequest,
     respondToUserInput,
     stopSession,

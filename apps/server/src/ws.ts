@@ -22,6 +22,7 @@ import {
   type AuthEnvironmentScope,
   AuthSessionId,
   CommandId,
+  CodexMcpRequestError,
   type DiscoveredLocalServerList,
   EventId,
   type OrchestrationCommand,
@@ -287,6 +288,7 @@ const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [WS_METHODS.serverGetConfig, AuthOrchestrationReadScope],
   [WS_METHODS.serverRefreshProviders, AuthOrchestrationOperateScope],
   [WS_METHODS.serverUpdateProvider, AuthOrchestrationOperateScope],
+  [WS_METHODS.serverCodexMcpRequest, AuthOrchestrationOperateScope],
   [WS_METHODS.serverUpsertKeybinding, AuthOrchestrationOperateScope],
   [WS_METHODS.serverRemoveKeybinding, AuthOrchestrationOperateScope],
   [WS_METHODS.serverGetSettings, AuthOrchestrationReadScope],
@@ -1258,6 +1260,19 @@ const makeWsRpcLayer = (
             {
               "rpc.aggregate": "server",
             },
+          ),
+        [WS_METHODS.serverCodexMcpRequest]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverCodexMcpRequest,
+            providerRegistry.manageCodexMcp
+              ? providerRegistry.manageCodexMcp(input.instanceId, input.threadId, input.operation)
+              : Effect.fail(
+                  new CodexMcpRequestError({
+                    operation: input.operation.type,
+                    detail: "Codex MCP management is unavailable in this server build.",
+                  }),
+                ),
+            { "rpc.aggregate": "server" },
           ),
         [WS_METHODS.serverUpsertKeybinding]: (rule) =>
           observeRpcEffect(
