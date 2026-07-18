@@ -131,6 +131,7 @@ export interface CodexAppServerConnectionOptions {
 export interface CodexAppServerConnection {
   readonly client: CodexClient.CodexAppServerClient["Service"];
   readonly exitCode: ChildProcessSpawner.ChildProcessHandle["exitCode"];
+  readonly collaborationModes: ReadonlySet<string>;
 }
 
 export interface CodexSessionRuntimeSendTurnInput {
@@ -198,6 +199,7 @@ export type CodexSessionRuntimeError =
   | CodexSessionRuntimePendingUserInputNotFoundError
   | CodexSessionRuntimeInvalidUserInputAnswersError
   | CodexSessionRuntimeActiveTurnNotSteerableError
+  | CodexSessionRuntimeCollaborationModeUnavailableError
   | CodexSessionRuntimeThreadIdMissingError;
 
 export class CodexSessionRuntimePendingApprovalNotFoundError extends Schema.TaggedErrorClass<CodexSessionRuntimePendingApprovalNotFoundError>()(
@@ -256,6 +258,18 @@ export class CodexSessionRuntimeActiveTurnNotSteerableError extends Schema.Tagge
     return this.turnKind
       ? `The active Codex ${this.turnKind} turn cannot be steered.`
       : "The active Codex turn cannot be steered.";
+  }
+}
+
+export class CodexSessionRuntimeCollaborationModeUnavailableError extends Schema.TaggedErrorClass<CodexSessionRuntimeCollaborationModeUnavailableError>()(
+  "CodexSessionRuntimeCollaborationModeUnavailableError",
+  {
+    mode: Schema.String,
+    availableModes: Schema.Array(Schema.String),
+  },
+) {
+  override get message(): string {
+    return `Codex collaboration mode '${this.mode}' is unavailable.`;
   }
 }
 
@@ -522,6 +536,7 @@ export function activeTurnNotSteerableKind(error: unknown): string | undefined {
   if (!isCodexAppServerRequestError(error)) {
     return undefined;
   }
+
   return (
     findActiveTurnNotSteerable(error.data) ??
     (error.errorMessage.toLowerCase().includes("active turn") &&
@@ -529,6 +544,30 @@ export function activeTurnNotSteerableKind(error: unknown): string | undefined {
       ? "active"
       : undefined)
   );
+}
+
+export function parseCollaborationModeNames(value: unknown): ReadonlySet<string> {
+  const modes = new Set<string>();
+  const visit = (entry: unknown): void => {
+    if (Array.isArray(entry)) {
+      for (const child of entry) visit(child);
+      return;
+    }
+    if (typeof entry !== "object" || entry === null) return;
+    for (const [key, child] of Object.entries(entry)) {
+      if (
+        (key === "mode" || key === "id" || key === "name") &&
+        typeof child === "string" &&
+        child.trim().length > 0
+      ) {
+        modes.add(child.trim());
+      } else {
+        visit(child);
+      }
+    }
+  };
+  visit(value);
+  return modes;
 }
 
 function classifyCodexStderrLine(rawLine: string): { readonly message: string } | null {
@@ -998,9 +1037,16 @@ export const makeCodexAppServerConnection = (
 
     yield* client.request("initialize", buildCodexInitializeParams());
     yield* client.notify("initialized", undefined);
+    const collaborationModes = yield* client.raw.request("collaborationMode/list", {}).pipe(
+      Effect.map(parseCollaborationModeNames),
+      Effect.catchIf(isTurnSteerUnavailableError, () =>
+        Effect.succeed(new Set<string>(["default", "plan"])),
+      ),
+    );
     return {
       client,
       exitCode: child.exitCode,
+      collaborationModes,
     };
   });
 
@@ -1718,6 +1764,12 @@ export const makeCodexSessionRuntime = (
       sendTurn: (input) =>
         Effect.gen(function* () {
           const providerThreadId = yield* readProviderThreadId;
+          if (input.interactionMode && !connection.collaborationModes.has(input.interactionMode)) {
+            return yield* new CodexSessionRuntimeCollaborationModeUnavailableError({
+              mode: input.interactionMode,
+              availableModes: [...connection.collaborationModes],
+            });
+          }
           if (options.mcpServer || hasConfiguredMcpServer(options.appServerArgs)) {
             yield* client.request("config/mcpServer/reload", undefined).pipe(
               Effect.catch((cause) =>

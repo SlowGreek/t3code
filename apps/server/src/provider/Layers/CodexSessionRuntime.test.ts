@@ -22,6 +22,7 @@ import {
   isRecoverableThreadResumeError,
   mcpElicitationQuestions,
   openCodexThread,
+  parseCollaborationModeNames,
 } from "./CodexSessionRuntime.ts";
 const isCodexAppServerRequestError = Schema.is(CodexErrors.CodexAppServerRequestError);
 const encodeUnknownJson = Schema.encodeUnknownSync(Schema.UnknownFromJsonString);
@@ -365,6 +366,15 @@ describe("MCP elicitation", () => {
         multiSelect: false,
       },
     ]);
+  });
+});
+
+describe("Codex collaboration modes", () => {
+  it("discovers mode identifiers from app-server list responses", () => {
+    NodeAssert.deepStrictEqual(
+      [...parseCollaborationModeNames({ data: [{ mode: "default" }, { id: "plan" }] })],
+      ["default", "plan"],
+    );
   });
 });
 

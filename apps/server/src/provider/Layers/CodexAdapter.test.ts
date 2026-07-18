@@ -304,6 +304,7 @@ it.effect("shares one Codex app-server connection across adapter thread sessions
   const sharedConnection = {
     client: {},
     exitCode: Effect.never,
+    collaborationModes: new Set(["default", "plan"]),
   } as unknown as CodexAppServerConnection;
   const makeConnection = vi.fn(() => Effect.succeed(sharedConnection));
   const layer = Layer.effect(

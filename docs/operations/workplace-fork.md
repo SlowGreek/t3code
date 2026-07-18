@@ -25,6 +25,8 @@ Do not force-push either protected branch. Resolve workplace integration conflic
 
 Each configured local Codex environment owns one long-lived `codex app-server` process. T3 opens, resumes, and multiplexes native Codex threads over that connection. Native notifications and callbacks are routed by Codex `threadId`; closing a T3 thread removes its routed handlers but does not terminate the environment connection. The app-server remains authoritative for thread state and history.
 
+At initialization T3 probes `collaborationMode/list` over the raw app-server channel and rejects unavailable requested modes. App-server versions that explicitly report method-not-found use the legacy `default`/`plan` set. T3 supplies mode-specific developer instructions only for those selected Codex modes to preserve the existing browser-preview integration; it does not replace base Codex instructions.
+
 T3-only metadata (workspace presentation, local checkpoints, and GUI state) remains in T3 persistence. It must not replace or synthesize Codex lifecycle state when the app-server provides an authoritative operation.
 
 When T3 creates a Git worktree it can apply the source checkout's current tracked diff with `applyCurrentChanges`. It also copies ignored `AGENTS.override.md` automatically. A repository may list additional untracked local files or directories in `.worktreeinclude`, one repository-relative path per line. Blank lines and `#` comments are ignored; absolute and parent-traversal paths are rejected.
